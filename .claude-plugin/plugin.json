@@ -1,7 +1,7 @@
 {
   "name": "tiered-development",
   "description": "Three-tier model delegation for Claude Code: Fable designs the approach and does the final deep review, the Opus coordinator orchestrates and launches fresh Opus builders for substantive code, and Sonnet handles mechanical edits, research, and per-step verification — a fresh agent per task so each gets a clean, focused context. Ships six agents, a gated skill, and an autonomous workflow.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "msartori",
     "email": "business@msartori.uk"

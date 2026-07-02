@@ -1,6 +1,6 @@
 ---
 name: tiered-development
-description: Use when tackling a non-trivial feature, refactor, or design problem and you want the work delegated across model tiers instead of done inline — "design and build X", "plan then implement Y the tiered way", "delegate this properly". Routes deep design/planning to Fable, keeps the Opus coordinator orchestrating (with a human approval gate) while launching a fresh agent per task — Opus builders for substantive code, Sonnet for mechanical edits and verification — so each task gets a clean, focused context. NOT for trivial one-line edits (just do those) or whole-repo review (use full-project-review).
+description: Use when tackling a non-trivial feature, refactor, or design problem and you want the work delegated across model tiers instead of done inline — "design and build X", "plan then implement Y the tiered way", "delegate this properly". Routes deep design/planning to Fable, keeps the Opus coordinator orchestrating (with a human approval gate) while launching a fresh agent per task — Opus builders for substantive code, Sonnet for mechanical edits and verification — each in its own git worktree so independent steps run in parallel and the coordinator's context stays clean (no LSP-diagnostic flood). NOT for trivial one-line edits (just do those) or whole-repo review (use full-project-review).
 ---
 
 # Tiered Development
@@ -50,31 +50,54 @@ top tier on mechanical edits.
    adjust before any edit is made.** This honors the user's standing "plan before
    changes" rule. Do not dispatch a single worker until the user says go.
 
-3. **Execute — launch a fresh agent per step, routed by tier.** Split the
-   approved plan into self-contained steps and dispatch each to a freshly-spawned
-   agent with only the context that step needs. You (the coordinator) do not
-   edit code yourself — you route.
-   - **Substantive steps → a fresh Opus `builder` per step** — non-trivial logic,
-     wiring that needs decisions, anything where the "how" is not fully spelled
-     out. Give each its own focused prompt (the design intent, the files, what to
-     verify). Launch independent builders in parallel (one message, multiple
-     Agent calls).
+3. **Execute — parallel workers in isolated workspaces, routed by tier.** Group
+   the approved steps into **waves**: a wave is a set of steps that are
+   independent and touch **disjoint files**, so they can run at once; put a step
+   that depends on another in a later wave. You (the coordinator) do not edit
+   code yourself — you route and integrate.
+   For each wave, launch every step's worker **in parallel, each in its own git
+   worktree** (`isolation: "worktree"` on the Agent call):
+   - **Substantive steps → a fresh Opus `builder`** — non-trivial logic, wiring
+     that needs decisions, anything where the "how" is not fully spelled out.
    - **Mechanical steps → the Sonnet `implementer`** — rote renames, applying a
-     settled pattern across files, boilerplate — with a self-contained prompt
-     that contains no open judgement. Also parallel where independent. Use
-     `reader` (Sonnet) for any read-only lookup a step needs.
-   - Watch for cross-step file conflicts: steps that edit the same file must run
-     in sequence (or in worktrees), not in parallel.
-   - If a step you routed to Sonnet turns out to need judgement, re-route it to a
-     `builder` rather than letting the implementer guess.
+     settled pattern, boilerplate. Use `reader` (Sonnet) for read-only lookups.
 
-4. **Per-step check — Sonnet.** After each change, dispatch a `verifier`
-   (Sonnet), adversarial by default, against that step's stated intent.
+   Each worker gets a self-contained prompt (design intent, files, what to
+   verify) and, being in its own worktree, edits without touching your tree.
 
-5. **Final deep review — Fable.** Once the change is assembled, dispatch
-   `deep-reviewer` (Fable) for the whole-change gate — the cross-cutting review
-   the per-step verifiers cannot do. Relay its verdict to the user, then handle
-   integration (commit/PR) under the user's existing git-permission prompts.
+4. **Integrate the wave.** Once a wave's workers finish, merge their worktree
+   branches back into the working tree (clean by construction — the files are
+   disjoint). Resolve/inspect only if something collided, then move to the next
+   wave so it sees the integrated result. If a step you routed to Sonnet turns
+   out to need judgement, re-route it to a `builder` rather than letting the
+   implementer guess.
+
+5. **Per-step check — Sonnet.** After a wave is integrated, dispatch a `verifier`
+   (Sonnet), adversarial by default, per step against its stated intent.
+
+6. **Final deep review — Fable.** Once the whole change is assembled, dispatch
+   `deep-reviewer` (Fable) for the cross-cutting review the per-step verifiers
+   cannot do (especially interactions between steps built in isolation). Relay
+   its verdict to the user, then handle final integration (commit/PR) under the
+   user's existing git-permission prompts.
+
+## Workspaces: why worktrees
+
+Implementation workers run in **isolated git worktrees**, not your working tree,
+for two reasons:
+
+- **Parallelism.** Independent, file-disjoint steps in the same wave run
+  concurrently without stepping on each other; you merge the disjoint results
+  back between waves.
+- **A clean coordinator context.** Because edits happen in a separate checkout,
+  your session's language server never sees the workers' in-progress, often
+  transiently-broken edits — so you are **not flooded with LSP diagnostics**
+  while work is underway. Verifiers run inside/after each worktree, and you only
+  take on the settled, integrated result.
+
+This needs a git repo. See `superpowers:using-git-worktrees` for the mechanics
+and the non-git fallback; without git, fall back to sequential edits in the
+shared tree (one step at a time).
 
 ## Escalation rule
 
@@ -89,7 +112,8 @@ If the user explicitly wants it hands-off (no approval gate mid-run), invoke the
 `tiered-development` **workflow** instead:
 `Workflow({ name: "tiered-development", args: "<level> <task>" })` — level is
 `quick`/`standard`/`deep`. It runs the same Fable→(Opus/Sonnet)→Fable pipeline
-deterministically — launching a fresh worker per step, routed by complexity —
+deterministically — grouping steps into file-disjoint waves, running each wave's
+workers in parallel worktrees, and merging them back with an integrator agent —
 but cannot pause for approval, so the gate in step 2 is lost.
 Default to this gated skill unless the user asks for autonomy.
 

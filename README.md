@@ -47,17 +47,23 @@ workers each build one well-scoped slice → Fable reviews the whole.
 
 `tiered-development` — the **gated, interactive** path. The Opus coordinator
 dispatches `architect`, presents the design + plan, **pauses for your approval**,
-then launches fresh `builder`/`implementer` agents per step, runs `verifier`
-checks, and closes with a `deep-reviewer` pass. Invoke with `/tiered-development`
-or by describing the intent ("design and build X the tiered way").
+then launches fresh `builder`/`implementer` agents per step — **each in its own
+git worktree**, so independent steps run in parallel and the coordinator's
+context is never flooded with the workers' in-progress LSP diagnostics. It merges
+each wave back, runs `verifier` checks, and closes with a `deep-reviewer` pass.
+Invoke with `/tiered-development` or by describing the intent ("design and build
+X the tiered way").
 
 ### Workflow (`workflows/tiered-development.js`)
 
 `tiered-development` — the **autonomous** counterpart (no mid-run approval gate;
-a background workflow cannot prompt). Fable designs and plans, tags each step
-`mechanical` vs `substantive`, then routes substantive → Opus `builder` and
-mechanical → Sonnet `implementer`, each followed by a `verifier`, and finishes
-with a `deep-reviewer`. Run it with:
+a background workflow cannot prompt). Fable designs and plans, grouping steps into
+file-disjoint **waves** and tagging each `mechanical` vs `substantive`. Each
+wave's steps run **in parallel, each in its own git worktree** (substantive → Opus
+`builder`, mechanical → Sonnet `implementer`); a Sonnet **integrator** merges the
+wave's branches back before the next wave, each step is checked by a `verifier`,
+and a `deep-reviewer` closes it out. In a non-git directory it falls back to
+sequential edits in the shared tree. Run it with:
 
 ```
 Workflow({ name: "tiered-development", args: "<level> <task>" })
