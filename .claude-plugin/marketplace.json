@@ -1,0 +1,20 @@
+{
+  "name": "msartori-tools",
+  "description": "msartori's Claude Code tooling marketplace",
+  "owner": {
+    "name": "msartori",
+    "email": "business@msartori.uk"
+  },
+  "plugins": [
+    {
+      "name": "tiered-development",
+      "description": "Three-tier model delegation: Fable designs & reviews, Opus orchestrates & builds substantive code, Sonnet handles mechanical work & verification.",
+      "version": "0.1.0",
+      "source": "./",
+      "author": {
+        "name": "msartori",
+        "email": "business@msartori.uk"
+      }
+    }
+  ]
+}
