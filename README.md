@@ -73,7 +73,7 @@ step cap). Example: `deep add a --json output mode to the report command`.
 This repo is its own Claude Code marketplace.
 
 ```
-/plugin marketplace add <your-git-url>      # e.g. github.com/you/claude-tiered-development
+/plugin marketplace add marlls1989/claude-tiered-development
 /plugin install tiered-development@msartori-tools
 ```
 
@@ -103,9 +103,6 @@ cp -r workflows/* ~/.claude/workflows/
   files from the plugin before installing.
 - **Not for trivial edits or whole-repo review.** For a one-liner, just do it.
   For auditing an existing codebase, use `full-project-review` / `/code-review`.
-- Fill in the `homepage`/`repository` fields in `.claude-plugin/plugin.json` and
-  the git URL above once you have pushed.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).

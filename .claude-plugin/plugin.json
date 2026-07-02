@@ -7,6 +7,8 @@
     "email": "business@msartori.uk"
   },
   "license": "MIT",
+  "homepage": "https://github.com/marlls1989/claude-tiered-development",
+  "repository": "https://github.com/marlls1989/claude-tiered-development",
   "keywords": [
     "agents",
     "workflow",
