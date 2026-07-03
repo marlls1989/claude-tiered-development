@@ -7,14 +7,14 @@ code than one crowded coordinator context doing everything.
 
 ```
         ┌─────────────────────────── Fable ───────────────────────────┐
-        │  architect       design the approach + the plan              │
+        │  architect       refine the rough plan into a waved plan     │
         │  deep-reviewer   final cross-cutting review of the whole     │
         └──────────────────────────────────────────────────────────────┘
                               ▲                     │
-                     plan / verdict          design + plan
+                    plan / verdict           rough plan
                               │                     ▼
         ┌────────────────────────── Opus ──────────────────────────────┐
-        │  coordinator     orchestrates, routes, keeps you in the loop  │
+        │  coordinator     brainstorm, route, gate, keep you in loop    │
         │  builder         a fresh Opus agent per SUBSTANTIVE step      │
         └──────────────────────────────────────────────────────────────┘
                               ▲                     │
@@ -27,8 +27,9 @@ code than one crowded coordinator context doing everything.
         └──────────────────────────────────────────────────────────────┘
 ```
 
-**The through-line:** Fable thinks → the coordinator routes → fresh Opus/Sonnet
-workers each build one well-scoped slice → Fable reviews the whole.
+**The through-line:** you brainstorm a rough plan with the user → Fable refines it
+into a waved plan → the coordinator routes each wave → fresh Opus/Sonnet workers
+each build one well-scoped slice in its own worktree → Fable reviews the whole.
 
 ## What's in the box
 
@@ -36,7 +37,7 @@ workers each build one well-scoped slice → Fable reviews the whole.
 
 | Agent | Tier | Role |
 |-------|------|------|
-| `architect` | Fable | Design + implementation planning. Read-only; the plan is the deliverable. |
+| `architect` | Fable | Refines the brainstormed rough plan into a dispatchable, wave-grouped plan. Read-only; the plan is the deliverable. |
 | `deep-reviewer` | Fable | Final deep, cross-cutting review after per-step checks. Read-only, adversarial. |
 | `builder` | Opus | Primary implementer of substantive, judgement-requiring code. May decide the *how*, never re-opens the design. |
 | `implementer` | Sonnet | Mechanical execution of a single precise step. No design judgement. |
@@ -45,32 +46,49 @@ workers each build one well-scoped slice → Fable reviews the whole.
 
 ### Skill (`skills/tiered-development/`)
 
-`tiered-development` — the **gated, interactive** path. The Opus coordinator
-dispatches `architect`, presents the design + plan, **pauses for your approval**,
-then launches fresh `builder`/`implementer` agents per step — **each in its own
-git worktree**, so independent steps run in parallel and the coordinator's
-context is never flooded with the workers' in-progress LSP diagnostics. It merges
-each wave back, runs `verifier` checks, and closes with a `deep-reviewer` pass.
-Invoke with `/tiered-development` or by describing the intent ("design and build
-X the tiered way").
+`tiered-development` — the **gated coordination** skill, and the single entry
+point. The Opus coordinator:
 
-### Workflow (`workflows/tiered-development.js`)
+1. **brainstorms a rough plan _with you_** (via `superpowers:brainstorming`,
+   grounding the discussion with `reader` agents),
+2. hands that rough plan to the **`design-panel`** workflow, where Fable refines
+   it into a numbered, wave-grouped plan,
+3. **pauses for your approval** (the gate this skill exists for),
+4. runs each wave through the **`execute-wave`** workflow — fresh
+   `builder`/`implementer` agents, each in its own git worktree — reacting between
+   waves to any `BLOCKER`, re-route, or integration conflict,
+5. closes with a `deep-reviewer` pass and relays the verdict.
 
-`tiered-development` — the **autonomous** counterpart (no mid-run approval gate;
-a background workflow cannot prompt). Fable designs and plans, grouping steps into
-file-disjoint **waves** and tagging each `mechanical` vs `substantive`. Each
-wave's steps run **in parallel, each in its own git worktree** (substantive → Opus
-`builder`, mechanical → Sonnet `implementer`); a Sonnet **integrator** merges the
-wave's branches back before the next wave, each step is checked by a `verifier`,
-and a `deep-reviewer` closes it out. In a non-git directory it falls back to
-sequential edits in the shared tree. Run it with:
+Invoke with `/tiered-development` or by describing the intent ("design and build X
+the tiered way").
 
-```
-Workflow({ name: "tiered-development", args: "<level> <task>" })
-```
+### Workflows (`workflows/`)
 
-`<level>` is `quick` | `standard` | `deep` (scales the design panel and the plan
-step cap). Example: `deep add a --json output mode to the report command`.
+The skill calls two small workflows for the phases with real deterministic
+fan-out. There is **no** overarching autonomous workflow — the skill, with its
+approval gate, is always in charge.
+
+- **`design-panel`** — refines the brainstormed rough plan into a dispatchable,
+  wave-grouped plan. `quick`/`standard` use a single Fable `architect`; `deep`
+  runs a 3-architect panel plus a synthesis. Called as
+  `Workflow({ name: "design-panel", args: { level, task, roughPlan } })`; returns
+  `{ design, plan, waves }`.
+- **`execute-wave`** — runs one wave: each step in **its own git worktree**
+  (substantive → Opus `builder`, mechanical → Sonnet `implementer`), a Sonnet
+  **integrator** merges the wave's branches back, then a `verifier` checks each
+  step. Worktrees are used for **every** step in a git repo — even a single
+  sequential one — so the workers' in-progress edits never flood the coordinator's
+  language server with false diagnostics; outside git it falls back to sequential
+  edits in the shared tree. Called as
+  `Workflow({ name: "execute-wave", args: { task, wave, steps, isGit } })` once
+  per wave.
+
+### Comms protocol (`skills/tiered-development/comms-protocol.md`)
+
+A shared, token-lean convention every agent and every workflow prompt follows:
+structured data not prose, `path:line`-cited, verbatim on error strings / commands
+/ verdict keywords / `BLOCKER` / `QUESTION`, with an auto-clarity carve-out so a
+`BLOCKER` explanation or a security caveat is never compressed into ambiguity.
 
 ## Install
 

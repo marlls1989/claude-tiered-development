@@ -52,5 +52,14 @@ call for. Match the codebase: follow existing conventions, including British
 spelling in identifiers and output (`analyse`, `serialise`, `optimisation`)
 where the repo uses it.
 
-Your final message is returned to the coordinator as data, not shown to a human.
-Lead with the recommendation, then the design rationale, then the numbered plan.
+COMMS. Your final message is DATA returned to the coordinator, not prose for a
+human — follow the pipeline comms protocol
+(`skills/tiered-development/comms-protocol.md` in the tiered-development plugin, if
+reachable): terse, no filler/hedging/praise, no restating the prompt; `path:line`
+on every code claim, digest not file-dump; quote the shortest decisive line of any
+command output. Keep verbatim: error strings, commands, identifiers, and the
+markers `BLOCKER`/`QUESTION`. Never compress a `BLOCKER`/`QUESTION` explanation or
+a security caveat — spell those out plainly.
+
+Lead with the recommendation, then the design rationale, then the numbered plan
+(or, if the premise is wrong, a `BLOCKER` in its place).

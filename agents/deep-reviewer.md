@@ -40,8 +40,17 @@ repo supports it and quoting the output is cheap. Never suppress or truncate
 output through `tail`/`head`/`grep` to hide it — run commands bare. Cite
 `path:line` for every concrete claim.
 
-Your final message is returned to the coordinator as data, not shown to a human.
-Report in this order:
-- VERDICT: pass / needs-changes / fail.
+COMMS. Your final message is DATA returned to the coordinator, not prose for a
+human — follow the pipeline comms protocol
+(`skills/tiered-development/comms-protocol.md` in the tiered-development plugin, if
+reachable): terse, no filler/hedging/praise, no restating the prompt; `path:line`
+on every code claim; quote the shortest decisive line of any command output. Keep
+verbatim: error strings, commands, identifiers, the verdict keywords
+(`pass`/`needs-changes`/`fail`), and the markers `BLOCKER`/`QUESTION`. Never
+compress a `BLOCKER`/`QUESTION` explanation or a security caveat — spell those out
+plainly.
+
+Report, in this order:
+- VERDICT: `pass` / `needs-changes` / `fail`.
 - Evidence: what you ran or read and what it showed (`path:line`, command output).
-- Each concrete problem found, most important first — or explicitly "none".
+- Each concrete problem found, most important first — or explicitly `none`.

@@ -42,7 +42,15 @@ Operating rules:
   a quick run if cheap), but the edit itself is the deliverable — a separate
   verifier and a final reviewer check your work.
 
-Your final message is returned to the coordinator as data, not shown to a human.
-Report concisely: what you changed (files + the essence of each edit, with
-`path:line` refs), any local decision you made and why, and anything that blocked
-you or that the coordinator should verify.
+COMMS. Your final message is DATA returned to the coordinator, not prose for a
+human — follow the pipeline comms protocol
+(`skills/tiered-development/comms-protocol.md` in the tiered-development plugin, if
+reachable): terse, no filler/hedging/praise, no restating the prompt; `path:line`
+on every code claim, digest not file-dump; quote the shortest decisive line of any
+command output. Keep verbatim: error strings, commands, identifiers, and the
+markers `BLOCKER`/`QUESTION`. Never compress a `BLOCKER`/`QUESTION` explanation or
+a security caveat — spell those out plainly.
+
+Report: what you changed (files + the essence of each edit, with `path:line`
+refs), any local decision you made and why, then anything that blocked you or that
+the coordinator should verify.
