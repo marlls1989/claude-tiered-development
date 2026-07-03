@@ -36,6 +36,10 @@ const TOTAL = Number.isInteger(A.totalSteps) && A.totalSteps > 0 ? A.totalSteps 
 // the coordinator's tree/LSP clean. Shared-tree sequential is the no-git fallback.
 const useWorktrees = IS_GIT
 
+// Agent types are registered under the plugin namespace (e.g. "tiered-development:builder"),
+// so `agentType` must carry the prefix — the bare name is not found.
+const NS = "tiered-development:"
+
 // ─── Fragments ───
 const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Cut filler/hedging/praise; no restating this prompt. path:line on every code claim; quote only the shortest decisive line of any command output. Keep verbatim: error strings, commands, identifiers, verdict keywords (pass/needs-changes/fail), and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
 
@@ -60,8 +64,8 @@ const INTEGRATE_SCHEMA = {
 const substantiveOf = s => s.complexity === "substantive"
 const implOpts = s => {
   const base = substantiveOf(s)
-    ? { label: "build:" + (s.idx + 1), phase: "Implement", model: "opus", agentType: "builder" }
-    : { label: "impl:" + (s.idx + 1), phase: "Implement", model: "sonnet", agentType: "implementer" }
+    ? { label: "build:" + (s.idx + 1), phase: "Implement", model: "opus", agentType: NS + "builder" }
+    : { label: "impl:" + (s.idx + 1), phase: "Implement", model: "sonnet", agentType: NS + "implementer" }
   return useWorktrees ? { ...base, isolation: "worktree" } : base
 }
 const implPrompt = s => {
@@ -83,7 +87,7 @@ const verifyOne = (s, impled) =>
     "Intended change: " + s.change + "\n" + (s.verify ? "Done when: " + s.verify + "\n" : "") +
     "\nWhat the implementer reported:\n" + (impled || "(no report returned)") + "\n\n" +
     "Check the change against its STATED intent, sceptically. Prefer evidence — run the relevant test/build/lint if cheap and quote the shortest decisive line. Return a verdict.\n\n" + COMMS,
-    { label: "verify:" + (s.idx + 1), phase: "Verify", model: "sonnet", agentType: "verifier", schema: VERDICT_SCHEMA }
+    { label: "verify:" + (s.idx + 1), phase: "Verify", model: "sonnet", agentType: NS + "verifier", schema: VERDICT_SCHEMA }
   )
 
 // ─── Implement ───
@@ -106,7 +110,7 @@ if (useWorktrees) {
     "3. If any merge reports a conflict, run `git merge --abort` and STOP: report the conflicting files as a BLOCKER (a conflict means the steps were not actually file-disjoint). Do not try to resolve it.\n" +
     "4. After each clean merge, remove that worktree with `git worktree remove <path>` and delete its now-merged branch.\n\n" +
     "Report how many branches you merged and any conflict.\n\n" + COMMS,
-    { label: "integrate:w" + WAVE, phase: "Integrate", model: "sonnet", agentType: "implementer", schema: INTEGRATE_SCHEMA }
+    { label: "integrate:w" + WAVE, phase: "Integrate", model: "sonnet", agentType: NS + "implementer", schema: INTEGRATE_SCHEMA }
   )
   log("wave " + WAVE + " integrated: " + (integration ? integration.merged + " branch(es) merged" + (integration.conflict && integration.conflict !== "none" ? ", CONFLICT: " + integration.conflict : "") : "integrator returned nothing"))
 }

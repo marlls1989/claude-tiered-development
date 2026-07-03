@@ -21,6 +21,10 @@ if (!TASK) return { error: "No task given. Pass args as { level, task, roughPlan
 const PANEL = LEVEL === "deep" ? 3 : 1
 const MAX_STEPS = LEVEL === "deep" ? 16 : LEVEL === "quick" ? 6 : 10
 
+// Agent types are registered under the plugin namespace (e.g. "tiered-development:architect"),
+// so `agentType` must carry the prefix — the bare name is not found.
+const NS = "tiered-development:"
+
 // ─── Shared prompt fragments ───
 const GROUNDING = `Explore the repository first — read enough of the relevant code and config to ground your work in what actually exists, and reuse existing utilities/patterns rather than inventing parallel ones. Cite path:line for load-bearing claims. Follow repo conventions, including British spelling in identifiers/output where the repo uses it. Apply YAGNI — no speculative scope.`
 const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Return only the structured output — no preamble, no restating this prompt. Cut filler/hedging/praise. path:line on every code claim. Keep verbatim: error strings, commands, identifiers, and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
@@ -75,7 +79,7 @@ if (PANEL > 1) {
   const ANGLES = ["the simplest thing that could work (MVP-first)", "robustness and edge-case correctness", "fit with existing architecture and least disruption"]
   const candidates = (await parallel(
     Array.from({ length: PANEL }, (_, i) => () =>
-      agent(refinePrompt(ANGLES[i % ANGLES.length]), { label: "refine:" + (i + 1), phase: "Refine", model: "fable", effort: "high", agentType: "architect", schema: PLAN_SCHEMA })
+      agent(refinePrompt(ANGLES[i % ANGLES.length]), { label: "refine:" + (i + 1), phase: "Refine", model: "fable", effort: "high", agentType: NS + "architect", schema: PLAN_SCHEMA })
     )
   )).filter(Boolean)
   log("Panel: " + candidates.length + " candidate plans")
@@ -89,10 +93,10 @@ if (PANEL > 1) {
   refined = await agent(
     "## Synthesise one plan from the panel\nTask: " + TASK + roughBlock + "\n" +
     "You have " + candidates.length + " independently-refined candidate plans. Judge them, then return ONE synthesised plan — the strongest single plan, grafting the best steps/ordering from the others where they fit. Keep it to at most " + MAX_STEPS + " steps, correctly waved (same-wave steps independent + file-disjoint). " + GROUNDING + "\n\n" + block + "\n\n" + COMMS,
-    { label: "synthesise", phase: "Synthesis", model: "fable", effort: "max", agentType: "architect", schema: PLAN_SCHEMA }
+    { label: "synthesise", phase: "Synthesis", model: "fable", effort: "max", agentType: NS + "architect", schema: PLAN_SCHEMA }
   )
 } else {
-  refined = await agent(refinePrompt(null), { label: "refine", phase: "Refine", model: "fable", effort: "high", agentType: "architect", schema: PLAN_SCHEMA })
+  refined = await agent(refinePrompt(null), { label: "refine", phase: "Refine", model: "fable", effort: "high", agentType: NS + "architect", schema: PLAN_SCHEMA })
 }
 
 if (!refined || !Array.isArray(refined.steps) || refined.steps.length === 0) {

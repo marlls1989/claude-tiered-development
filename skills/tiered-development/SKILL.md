@@ -11,16 +11,17 @@ Deliberate delegation so each model tier does what it is best at, with you (the
 Opus coordinator) orchestrating and the user in the loop at the one gate that
 matters.
 
-- **Fable** (`architect`, `deep-reviewer`) — the hardest thinking: refining the
-  plan and the final deep review of subtle logic.
+- **Fable** (`tiered-development:architect`, `tiered-development:deep-reviewer`) —
+  the hardest thinking: refining the plan and the final deep review of subtle logic.
 - **Opus** — two roles, kept separate on purpose:
   - **You, the coordinator** — orchestration only: brainstorm with the user,
     route work, keep them in the loop, decide between tiers. Keep your own context
     lean; do NOT implement inline.
-  - **`builder` (Opus)** — the primary implementer, launched fresh per
-    substantive step so each gets a clean, focused context.
-- **Sonnet** (`reader`, `implementer`, `verifier`) — the cheap workforce: read-only
-  research, mechanical edits, and per-step verification.
+  - **`tiered-development:builder` (Opus)** — the primary implementer, launched
+    fresh per substantive step so each gets a clean, focused context.
+- **Sonnet** (`tiered-development:reader`, `tiered-development:implementer`,
+  `tiered-development:verifier`) — the cheap workforce: read-only research,
+  mechanical edits, and per-step verification.
 
 **Why delegate instead of doing it yourself:** every implementation task goes to a
 freshly-spawned agent with only the context that task needs. That focus — not the
@@ -34,13 +35,21 @@ wave) — because a script runs their parallelism better than you can by hand.
 Everything else — the brainstorm, the approval gate, routing, escalation, the
 deep review — stays here, with you.
 
+**Namespacing (required).** Every agent and workflow shipped by this plugin is
+registered under the `tiered-development:` prefix. Whenever you dispatch one — as
+a `subagent_type` for the `Agent` tool, or a `name` for `Workflow`/`Skill` — use
+the fully-qualified name (`tiered-development:architect`,
+`tiered-development:deep-reviewer`, `tiered-development:reader`,
+`tiered-development:execute-wave`, …). The bare name is **not found** and the
+dispatch fails.
+
 ## The protocol
 
 ### 1. Brainstorm a rough plan — WITH the user
 
 Draft the approach and a rough set of steps *together with the user*. Use
-`superpowers:brainstorming` to drive the dialogue, and dispatch `reader` (Sonnet)
-agents to ground the discussion in what the code actually does before you commit
+`superpowers:brainstorming` to drive the dialogue, and dispatch
+`tiered-development:reader` (Sonnet) agents to ground the discussion in what the code actually does before you commit
 to an approach. The output of this phase is a **rough plan**: the chosen approach
 plus a rough list of steps. It does not need to be dispatchable yet — Fable
 refines it next. Getting the user's intent right here is what the whole pipeline
@@ -77,7 +86,8 @@ rather than an autonomous workflow — never skip it.
 ### 4. Execute — one wave at a time, via `execute-wave`
 
 Probe once whether you are in a git repo (`git rev-parse --is-inside-work-tree`,
-directly or via a one-line `reader`). Then, for each wave in ascending order, run:
+directly or via a one-line `tiered-development:reader`). Then, for each wave in
+ascending order, run:
 
 ```
 Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps } })
@@ -88,8 +98,9 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
   nicer labels).
 
 Each wave's steps run **in parallel, each in its own git worktree** (substantive →
-Opus `builder`, mechanical → Sonnet `implementer`); an integrator merges the
-wave's branches back into your working tree; then a `verifier` checks each step.
+Opus `tiered-development:builder`, mechanical → Sonnet
+`tiered-development:implementer`); an integrator merges the wave's branches back
+into your working tree; then a `tiered-development:verifier` checks each step.
 Worktrees are used for **every** step in a git repo — even a single sequential
 step — so the workers' in-progress, transiently-broken edits never reach your tree
 and never flood your language server with false diagnostics. Outside git it falls
@@ -99,20 +110,20 @@ back to sequential edits in the shared tree.
 this is why you call it per wave rather than handing over the whole plan:**
 
 - If a step returns a `BLOCKER` or a question, resolve it yourself or escalate the
-  step back to `architect` (Fable) for a design decision. Never silently downgrade
-  a judgement call by guessing on a worker's behalf.
+  step back to `tiered-development:architect` (Fable) for a design decision. Never
+  silently downgrade a judgement call by guessing on a worker's behalf.
 - If `integration.conflict` is not `none`, the wave's steps were not actually
   file-disjoint. Stop, inspect, and re-plan that boundary before continuing.
 - If a step you routed to Sonnet turns out to need judgement, re-route it to a
-  `builder` rather than accepting a guessed result.
+  `tiered-development:builder` rather than accepting a guessed result.
 
 Only move to the next wave once the current one is integrated and clean, so the
 next wave sees the settled result.
 
 ### 5. Final deep review — Fable, inline
 
-Once the whole change is assembled, dispatch `deep-reviewer` (Fable) directly with
-the `Agent` tool — a single agent, no fan-out, so no workflow. Give it the task,
+Once the whole change is assembled, dispatch `tiered-development:deep-reviewer`
+(Fable) directly with the `Agent` tool — a single agent, no fan-out, so no workflow. Give it the task,
 the approved design, and what changed. It does the cross-cutting review the
 per-step verifiers cannot (especially interactions between steps built in
 isolation). Relay its verdict to the user.
@@ -135,8 +146,8 @@ a restatement of the task.
 ## Escalation rule
 
 If a Sonnet worker returns `BLOCKER`, ambiguous, or a question rather than a
-result, resolve it yourself or escalate the step back to `architect` (Fable) for a
-design decision. Never silently downgrade a judgement call to the cheap tier by
+result, resolve it yourself or escalate the step back to
+`tiered-development:architect` (Fable) for a design decision. Never silently downgrade a judgement call to the cheap tier by
 guessing on the worker's behalf — that defeats the whole arrangement.
 
 ## Workspaces: why worktrees
@@ -162,5 +173,6 @@ without git, `execute-wave` falls back to sequential edits in the shared tree.
   overhead is not worth it.
 - Reviewing an entire existing codebase — use `full-project-review`.
 - A change where the approach is already fully decided and needs no plan — skip
-  the brainstorm/refine and go straight to dispatching workers (`builder` /
-  `implementer`), still via `execute-wave` if you want the worktree isolation.
+  the brainstorm/refine and go straight to dispatching workers
+  (`tiered-development:builder` / `tiered-development:implementer`), still via
+  `execute-wave` if you want the worktree isolation.
