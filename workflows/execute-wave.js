@@ -10,7 +10,11 @@ export const meta = {
 }
 
 // ─── Args ───
-const A = (args && typeof args === "object") ? args : {}
+// `args` may arrive as a parsed object or as a JSON string depending on the
+// harness — normalise to an object either way.
+let A = args
+if (typeof A === "string") { try { A = JSON.parse(A) } catch { A = {} } }
+if (!A || typeof A !== "object") A = {}
 const TASK = typeof A.task === "string" ? A.task.trim() : ""
 const WAVE = Number.isInteger(A.wave) && A.wave > 0 ? A.wave : 1
 const RAW_STEPS = Array.isArray(A.steps) ? A.steps : []

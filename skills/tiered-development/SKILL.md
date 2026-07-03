@@ -52,7 +52,7 @@ Hand the rough plan to Fable to turn into a concrete, dispatchable, wave-grouped
 plan:
 
 ```
-Workflow({ name: "design-panel", args: { level, task, roughPlan } })
+Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan } })
 ```
 
 - `level` is `quick` | `standard` | `deep` — `deep` runs a 3-architect panel plus
@@ -80,7 +80,7 @@ Probe once whether you are in a git repo (`git rev-parse --is-inside-work-tree`,
 directly or via a one-line `reader`). Then, for each wave in ascending order, run:
 
 ```
-Workflow({ name: "execute-wave", args: { task, wave, steps, isGit, totalSteps } })
+Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps } })
 ```
 
 - `steps` is just this wave's steps (filter the plan by `wave`).
