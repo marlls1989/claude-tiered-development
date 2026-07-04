@@ -19,6 +19,10 @@ const TASK = typeof A.task === "string" ? A.task.trim() : ""
 const WAVE = Number.isInteger(A.wave) && A.wave > 0 ? A.wave : 1
 const RAW_STEPS = Array.isArray(A.steps) ? A.steps : []
 const IS_GIT = !!A.isGit
+// The commit each worktree must be reset onto. The harness cuts isolation worktrees
+// from the repo's DEFAULT branch, not the checked-out one, so without this the workers
+// never see the current branch's state. Empty = older coordinator; skip the reset then.
+const BASE_REF = typeof A.baseRef === "string" ? A.baseRef.trim() : ""
 if (RAW_STEPS.length === 0) return { error: "No steps given for this wave. Pass args as { task, wave, steps, isGit }." }
 
 // Normalise steps; keep a stable idx.
@@ -73,8 +77,11 @@ const implPrompt = s => {
   const judgement = substantiveOf(s)
     ? "It needs implementation judgement — decide the 'how' — but do NOT re-open the design or expand scope. If realising it properly would require changing the approach, STOP and report a BLOCKER."
     : "Make exactly this change — no more, and no design judgement. If it is ambiguous or impossible as written, STOP and report a BLOCKER rather than guessing."
+  const resetNote = useWorktrees && BASE_REF
+    ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + BASE_REF + "` so your work builds on the intended commit (its objects are already present in the shared repo). If that command fails, or the files/API this step depends on are still missing afterward, STOP and report a BLOCKER rather than guessing."
+    : ""
   const wtNote = useWorktrees
-    ? "\n\nYou are working in an ISOLATED git worktree that may run in parallel with sibling steps. Your worktree may NOT contain in-progress changes from those siblings; if this step turns out to need code another step was to add and you cannot find it, STOP and report a BLOCKER rather than guessing. When the change is complete, COMMIT it in this worktree with a concise message describing the step (no attribution trailer)."
+    ? resetNote + "\n\nYou are working in an ISOLATED git worktree that may run in parallel with sibling steps. Your worktree may NOT contain in-progress changes from those siblings; if this step turns out to need code another step was to add and you cannot find it, STOP and report a BLOCKER rather than guessing. When the change is complete, COMMIT it in this worktree with a concise message describing the step (no attribution trailer)."
     : ""
   return "## Implementation step " + (s.idx + 1) + "/" + TOTAL + " (wave " + WAVE + "): " + s.title + "\n" +
     "This is part of a larger task: " + TASK + "\n\n" + filesLine + "Change to make:\n" + s.change + "\n\n" +

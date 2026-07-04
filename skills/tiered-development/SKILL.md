@@ -30,8 +30,10 @@ quality. Your job is to slice the work cleanly and route each slice to the right
 tier.
 
 You drive this. Two phases with real fan-out are extracted into small workflows
-you **call** — `design-panel` (refine the plan) and `execute-wave` (build one
-wave) — because a script runs their parallelism better than you can by hand.
+you **call** — `tiered-development:design-panel` (refine the plan) and
+`tiered-development:execute-wave` (build one wave) — because a script runs their
+parallelism better than you can by hand. Always invoke them by these
+fully-qualified names; the bare `design-panel` / `execute-wave` do not resolve.
 Everything else — the brainstorm, the approval gate, routing, escalation, the
 deep review — stays here, with you.
 
@@ -55,7 +57,7 @@ plus a rough list of steps. It does not need to be dispatchable yet — Fable
 refines it next. Getting the user's intent right here is what the whole pipeline
 depends on.
 
-### 2. Refine the rough plan — Fable, via `design-panel`
+### 2. Refine the rough plan — Fable, via `tiered-development:design-panel`
 
 Hand the rough plan to Fable to turn into a concrete, dispatchable, wave-grouped
 plan:
@@ -83,19 +85,25 @@ made.** This honours the user's standing "plan before changes" rule. Do not run 
 single wave until the user says go. This gate is the reason this skill exists
 rather than an autonomous workflow — never skip it.
 
-### 4. Execute — one wave at a time, via `execute-wave`
+### 4. Execute — one wave at a time, via `tiered-development:execute-wave`
 
 Probe once whether you are in a git repo (`git rev-parse --is-inside-work-tree`,
 directly or via a one-line `tiered-development:reader`). Then, for each wave in
-ascending order, run:
+ascending order, **re-probe `git rev-parse HEAD`** to get the current branch tip and
+run:
 
 ```
-Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps } })
+Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef } })
 ```
 
 - `steps` is just this wave's steps (filter the plan by `wave`).
-- `isGit` is your probe result; `totalSteps` is the whole plan's step count (for
-  nicer labels).
+- `isGit` is your first probe result; `totalSteps` is the whole plan's step count
+  (for nicer labels).
+- `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's
+  isolation worktree from the repo's **default branch**, not your checked-out branch,
+  so the workers reset onto `baseRef` to build on the right foundation. **Re-probe it
+  every wave** — the integrator advances your branch as each wave merges in, so
+  passing the fresh tip is what carries the prior waves' results into the next one.
 
 Each wave's steps run **in parallel, each in its own git worktree** (substantive →
 Opus `tiered-development:builder`, mechanical → Sonnet
@@ -164,6 +172,12 @@ working tree, for two reasons:
   concurrently without stepping on each other; the integrator merges the disjoint
   results back between waves.
 
+One caveat the harness imposes: an isolation worktree is cut from the repo's
+**default branch**, not your checked-out branch. That is why step 4 passes `baseRef`
+(your current `HEAD`) into each wave — the workers `git reset --hard` onto it before
+working, so a feature branch's foundation (and each prior wave's integrated result)
+actually reaches them.
+
 This needs a git repo. See `superpowers:using-git-worktrees` for the mechanics;
 without git, `execute-wave` falls back to sequential edits in the shared tree.
 
@@ -175,4 +189,4 @@ without git, `execute-wave` falls back to sequential edits in the shared tree.
 - A change where the approach is already fully decided and needs no plan — skip
   the brainstorm/refine and go straight to dispatching workers
   (`tiered-development:builder` / `tiered-development:implementer`), still via
-  `execute-wave` if you want the worktree isolation.
+  `tiered-development:execute-wave` if you want the worktree isolation.
