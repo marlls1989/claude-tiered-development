@@ -168,6 +168,10 @@ with false diagnostics. Outside git it falls back to sequential edits in the sha
 `execute-wave` returns `{ wave, results, integration }`. **React between waves —
 this is why you call it per wave rather than handing over the whole plan:**
 
+- As you read each wave's `results`, **collect the builder/implementer flags** —
+  the assumptions they had to make, local decisions, and explicit "coordinator
+  should verify/confirm" notes from their `Report:` returns — not just the
+  pass/fail verdicts. Carry them forward; they feed the final review (step 5).
 - If a step returns a `BLOCKER` or a question, apply the **## Escalation rule** below.
 - If the wave verifier returns `fail` or `needs-changes` on a step (it ran cleanly
   but the result is wrong — not a `BLOCKER`), do **not** advance the wave. Spin a
@@ -190,7 +194,11 @@ next wave sees the settled result.
 
 Once the whole change is assembled, run the cross-cutting review the per-wave
 verifiers cannot (especially interactions between steps built in isolation), then
-relay the verdict to the user. Two ways, scale to the change:
+relay the verdict to the user. **Forward the builder/implementer flags you
+collected in step 4** into the review's context — fold them into the
+`review-panel` `changed` argument (or the inline `deep-reviewer` prompt) — so the
+reviewer scrutinises exactly the spots the workers were uncertain about instead of
+having to rediscover them. Two ways, scale to the change:
 
 - **Deep / high-stakes** — `tiered-development:review-panel`, mirroring design-panel:
 
