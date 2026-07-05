@@ -9,7 +9,7 @@
     {
       "name": "tiered-development",
       "description": "Three-tier model delegation: Opus coordinates (brainstorm + gate), Fable refines the plan & reviews, Opus builds substantive code, Sonnet handles mechanical work & verification.",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "source": "./",
       "author": {
         "name": "msartori",

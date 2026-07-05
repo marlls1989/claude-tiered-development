@@ -25,13 +25,45 @@ const IS_GIT = !!A.isGit
 const BASE_REF = typeof A.baseRef === "string" ? A.baseRef.trim() : ""
 if (RAW_STEPS.length === 0) return { error: "No steps given for this wave. Pass args as { task, wave, steps, isGit }." }
 
+// Complexity → model tier. The coordinator hand-authors these steps, so accept
+// the common adjectives for each tier. But NEVER silently downgrade an
+// unrecognised value to Sonnet — a wrong tier wastes an Opus-worthy step on a
+// cheap model with no signal back. Unknown → null, and we reject the whole wave
+// loudly (see the guard below). Deliberately ambiguous middle terms (medium,
+// moderate) are left out so they get rejected — the coordinator must decide.
+const COMPLEXITY_ALIASES = {
+  substantive: "substantive", substantial: "substantive", complex: "substantive",
+  hard: "substantive", high: "substantive", nontrivial: "substantive",
+  "non-trivial": "substantive", difficult: "substantive", heavy: "substantive",
+  mechanical: "mechanical", mechanic: "mechanical", trivial: "mechanical",
+  simple: "mechanical", low: "mechanical", easy: "mechanical",
+  rote: "mechanical", boilerplate: "mechanical", straightforward: "mechanical",
+}
+const normalizeComplexity = raw =>
+  COMPLEXITY_ALIASES[typeof raw === "string" ? raw.trim().toLowerCase() : ""] || null
+
+// Scream, don't guess: refuse the wave if any step's complexity is unrecognised.
+const badComplexity = RAW_STEPS
+  .map((s, i) => ({ n: i + 1, title: s.title || ("step " + (i + 1)), raw: s.complexity }))
+  .filter(s => normalizeComplexity(s.raw) === null)
+if (badComplexity.length > 0) {
+  return {
+    error: "execute-wave: unrecognised `complexity` on " + badComplexity.length +
+      " step(s) — REFUSING to run this wave rather than silently downgrading to Sonnet. " +
+      "Set each step's complexity to one tier and re-invoke:\n" +
+      badComplexity.map(s => "  - step " + s.n + " (" + s.title + "): complexity=" + JSON.stringify(s.raw)).join("\n") +
+      "\nAccepted → substantive (Opus): substantive/substantial/complex/hard/high/nontrivial/difficult/heavy. " +
+      "mechanical (Sonnet): mechanical/trivial/simple/low/easy/rote/boilerplate/straightforward.",
+  }
+}
+
 // Normalise steps; keep a stable idx.
 const steps = RAW_STEPS.map((s, i) => ({
   idx: Number.isInteger(s.idx) ? s.idx : i,
   title: s.title || ("step " + (i + 1)),
   files: Array.isArray(s.files) ? s.files : [],
   change: s.change || "",
-  complexity: s.complexity === "substantive" ? "substantive" : "mechanical",
+  complexity: normalizeComplexity(s.complexity),
   verify: s.verify || "",
 }))
 const TOTAL = Number.isInteger(A.totalSteps) && A.totalSteps > 0 ? A.totalSteps : steps.length
