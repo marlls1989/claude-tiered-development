@@ -78,9 +78,12 @@ pipeline depends on.
 ### 2. Refine the rough plan — via `tiered-development:design-panel`
 
 Hand the rough plan to the architect(s) to turn into a concrete, dispatchable,
-wave-grouped plan. **Call `EnterPlanMode` as you dispatch design-panel** —
-design-panel is read-only so plan mode permits it, and this makes the step-3
-approval gate harness-enforced (no edit can slip through before the user says go):
+wave-grouped plan. **Dispatch design-panel FIRST, then immediately call
+`EnterPlanMode`** while it runs in the background — design-panel is read-only
+planning, and entering plan mode right after launch (rather than dispatching from
+within it) makes the step-3 approval gate harness-enforced without depending on
+whether the harness permits dispatching a workflow under plan mode (no edit can
+slip through before the user says go):
 
 ```
 Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })
@@ -199,7 +202,10 @@ relay the verdict to the user. Two ways, scale to the change:
 **If the verdict is not `pass`, do not proceed to step 6.** Loop back: spin a
 targeted fix-up wave for the flagged steps (via `tiered-development:execute-wave`,
 escalating tier as needed), or re-plan via `tiered-development:design-panel` if the
-design itself is wrong — then re-review. Only a `pass` advances to Integrate.
+design itself is wrong — then re-review. If you loop back by re-planning via
+design-panel (rather than just a fix-up wave), re-enter plan mode after dispatching
+it and re-gate via `ExitPlanMode` before executing the revised plan, exactly as in
+steps 2–3. Only a `pass` advances to Integrate.
 
 ### 6. Integrate
 
