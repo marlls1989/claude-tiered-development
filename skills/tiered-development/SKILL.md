@@ -1,6 +1,6 @@
 ---
 name: tiered-development
-description: Use when tackling a non-trivial feature, refactor, or design problem and you want the work delegated across model tiers instead of done inline — "design and build X", "plan then implement Y the tiered way", "delegate this properly". You (the Opus coordinator) draft a rough plan WITH the user via brainstorming, hand it to design-panel (Opus and/or Fable architect(s), your choice) to refine into a waved plan, pause for the user's approval, then run each wave through the execute-wave workflow — fresh Opus builders for substantive steps, Sonnet for mechanical, Haiku for menial, each in its own git worktree — and close with a deep review (review-panel). NOT for trivial one-line edits (just do those) or whole-repo review (use full-project-review).
+description: Use when tackling a non-trivial feature, refactor, or design problem and you want the work delegated across model tiers instead of done inline — "design and build X", "plan then implement Y the tiered way", "delegate this properly". You (the Opus coordinator) draft a rough plan WITH the user via brainstorming, hand it to design-panel — a cheap Sonnet composer picks the Opus/Fable architect(s) by default, and you override only when the user asks — to refine into a waved plan, pause for the user's approval, then run each wave through the execute-wave workflow — fresh Opus builders for substantive steps, Sonnet for mechanical, Haiku for menial, each in its own git worktree — and close with a deep review (review-panel). NOT for trivial one-line edits (just do those) or whole-repo review (use full-project-review).
 ---
 
 # Tiered Development
@@ -98,7 +98,7 @@ Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPl
 
 - `level` is `quick` | `standard` | `deep` — sets the plan's step budget. Scale it to the task.
 - `task` is the task description; `roughPlan` is what you and the user drafted in step 1.
-- **`panelModels`** (optional) — a 1–5 array of `"opus"`/`"fable"`, one architect
+- **`panelModels`** (optional override) — a 1–5 array of `"opus"`/`"fable"`, one architect
   each: `["opus"]` a single Opus refine, `["opus","opus","opus"]` an Opus panel,
   `["fable","opus","fable"]` a mixed panel. On a multi-member panel the architects
   **divide the labour by aspect** (correctness, architecture, decomposition,
@@ -110,8 +110,9 @@ Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPl
   automatically (once Fable owns a hard aspect, an equal must merge it). The two-tier
   pattern — an Opus panel then a Fable integrator (`panelModels:["opus","opus","opus"],
   integratorModel:"fable"`) — puts Fable on the *final* design only.
-- **Omit both** to let a cheap Sonnet composer pick the composition (Opus-leaning,
-  Fable only for high complexity/impact). Set them when you want control.
+- **Prefer omitting both** — a cheap Sonnet composer then picks the composition
+  (Opus-leaning, Fable only for high complexity/impact). This is the default path;
+  set them explicitly only when the user asks for a specific panel or integrator.
 
 It returns `{ design, plan, waves }` — `design` is `{ recommendation, rationale,
 risks }`; `plan` is an array of steps, each `{ idx, title, files, change,
@@ -210,8 +211,9 @@ having to rediscover them. Two ways, scale to the change:
   `reviewModels` (1–5 of `"opus"`/`"fable"`) fans out reviewers on distinct lenses;
   `integratorModel` (`"opus"`|`"fable"`, **never Sonnet**) merges them into one
   verdict (most severe wins). The two-tier pattern (`reviewModels:["opus","opus"],
-  integratorModel:"fable"`) puts Fable on the *final* verdict only. Omit both to let
-  the Sonnet composer pick. Returns `{ review: { verdict, evidence, problems } }`.
+  integratorModel:"fable"`) puts Fable on the *final* verdict only. Prefer omitting
+  both — the Sonnet composer then picks; set them explicitly only when the user asks
+  for a specific panel or integrator. Returns `{ review: { verdict, evidence, problems } }`.
 - **Light** — a single `tiered-development:deep-reviewer` inline via the `Agent` tool
   (pick `model: opus`, or `fable` if it warrants the cost). No fan-out, no workflow.
 
