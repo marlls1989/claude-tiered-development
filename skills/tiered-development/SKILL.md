@@ -20,7 +20,15 @@ matters.
 - **Opus** — three uses:
   - **You, the coordinator** — orchestration only: brainstorm with the user,
     route work, keep them in the loop, decide between tiers. Keep your own context
-    lean; do NOT implement inline.
+    lean; do NOT implement inline. Do NOT run builds/tests/lints or grep/read
+    source files to check a worker's output either — the per-wave verifier
+    verifies each step and the review-panel is the whole-change gate, so react to
+    their structured verdicts instead of re-checking yourself. If you genuinely
+    need to know something about the code, dispatch a `tiered-development:reader`
+    rather than reading it directly; reading code or running checks inline burns
+    your context and duplicates the workforce's job. The only commands you run are
+    orchestration: probing `git rev-parse HEAD` for a wave's `baseRef`, and the
+    final integration commit/push.
   - **`tiered-development:builder` (Opus)** — the primary implementer, launched
     fresh per substantive step so each gets a clean, focused context.
   - **Default thinking tier** for `architect` / `deep-reviewer` and the **floor for
@@ -138,7 +146,8 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
 - `isGit` is your first probe result; `totalSteps` is the whole plan's step count
   (for nicer labels).
 - `integratorModel` (optional, `"haiku"`|`"sonnet"`) — the git-branch integrator.
-  Defaults to **Haiku**, escalating to Sonnet automatically on conflict; override only
+  Defaults to **Haiku**, escalating to Sonnet automatically on conflict or if the
+  Haiku pass returns no result (a failed pass); override only
   to pin it. (This is the *git* integrator — distinct from the ≥Opus plan integrator.)
 - `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's
   isolation worktree from the repo's **default branch**, not your checked-out branch,
