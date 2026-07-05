@@ -40,7 +40,7 @@ const NS = "tiered-development:"
 
 // ─── Shared prompt fragments ───
 const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Return only the structured output — no preamble, no restating this prompt. Cut filler/hedging/praise. path:line on every code claim; quote the shortest decisive line of any command output. Keep verbatim: error strings, commands, identifiers, the verdict keywords (pass/needs-changes/fail), and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
-const LENSES = ["subtle correctness & logic", "architectural coherence & cross-module interactions", "security, error paths, resource handling & partial failure"]
+const LENSES = ["subtle correctness & logic", "architectural coherence & cross-module interactions", "security, error paths, resource handling & partial failure", "tests & coverage", "scope, simplicity & YAGNI"]
 const contextBlock =
   "Task: " + TASK + "\n\n" +
   (DESIGN ? "Approved design:\n" + DESIGN + "\n\n" : "") +
@@ -72,6 +72,7 @@ const reviewPrompt = lens =>
   "Return: VERDICT (pass/needs-changes/fail), the evidence, and each concrete problem (most important first) or 'none'.\n\n" + COMMS
 
 // ─── Compose: pick the reviewer composition when the coordinator did not ───
+let compositionRationale = ""
 if (!panelSpecified) {
   phase("Compose")
   const picked = await agent(
@@ -83,22 +84,26 @@ if (!panelSpecified) {
   )
   if (picked && validModelList(picked.reviewModels)) reviewModels = picked.reviewModels
   if (!integSpecified && picked && MODEL_SET.includes(picked.integratorModel)) integratorModel = picked.integratorModel
-  log("Composer: panel=[" + (Array.isArray(reviewModels) ? reviewModels.join(",") : "?") + "] integrator=" + (integratorModel || "opus") + (picked && picked.rationale ? " — " + picked.rationale : ""))
+  if (picked && picked.rationale) compositionRationale = picked.rationale
 }
 // Static fallback (composer omitted or failed): spend Fable sparingly.
 if (!validModelList(reviewModels)) reviewModels = LEVEL === "deep" ? ["fable", "opus", "fable"] : ["opus"]
 // Integrator defaults to the top tier PRESENT in the panel (never below Opus): once
 // a Fable reviewer is on the panel, a Fable integrator merges the verdict as an equal.
 if (!MODEL_SET.includes(integratorModel)) integratorModel = reviewModels.includes("fable") ? "fable" : "opus"
+log("Composition: panel=[" + reviewModels.join(",") + "] integrator=" + integratorModel + (compositionRationale ? " — " + compositionRationale : ""))
 
 // ─── Review ───
 phase("Review")
 const multi = reviewModels.length > 1
-const candidates = (await parallel(
+const lensesUsed = reviewModels.map((m, i) => multi ? LENSES[i % LENSES.length] : null)
+const raw = await parallel(
   reviewModels.map((m, i) => () =>
-    agent(reviewPrompt(multi ? LENSES[i % LENSES.length] : null), { label: "review:" + (i + 1), phase: "Review", model: m, effort: "high", agentType: NS + "deep-reviewer", schema: REVIEW_SCHEMA })
+    agent(reviewPrompt(lensesUsed[i]), { label: "review:" + (i + 1), phase: "Review", model: m, effort: "high", agentType: NS + "deep-reviewer", schema: REVIEW_SCHEMA })
   )
-)).filter(Boolean)
+)
+const candidates = []
+raw.forEach((r, i) => { if (r) { r._lens = lensesUsed[i]; candidates.push(r) } })
 log("Panel: " + candidates.length + " review(s) [" + reviewModels.join(",") + "]")
 if (candidates.length === 0) return { error: "Review produced no verdict." }
 
@@ -107,7 +112,7 @@ let review
 if (candidates.length > 1 || integSpecified) {
   phase("Integrate")
   const block = candidates.map((c, i) =>
-    "### Reviewer [" + i + "] (" + (multi ? LENSES[i % LENSES.length] : "whole-change") + ")\nVerdict: " + c.verdict + "\nEvidence: " + (c.evidence || "") + "\nProblems: " + (c.problems || "none")
+    "### Reviewer [" + i + "] (" + (c._lens || "whole-change") + ")\nVerdict: " + c.verdict + "\nEvidence: " + (c.evidence || "") + "\nProblems: " + (c.problems || "none")
   ).join("\n\n")
   review = await agent(
     "## Integrate the panel into ONE final verdict\n" + contextBlock +
