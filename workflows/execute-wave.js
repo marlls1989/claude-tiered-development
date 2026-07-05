@@ -24,6 +24,7 @@ const IS_GIT = !!A.isGit
 // from the repo's DEFAULT branch, not the checked-out one, so without this the workers
 // never see the current branch's state. Empty = older coordinator; skip the reset then.
 const BASE_REF = typeof A.baseRef === "string" ? A.baseRef.trim() : ""
+if (!TASK) return { error: "No task given. Pass args as { task, wave, steps, isGit }." }
 if (RAW_STEPS.length === 0) return { error: "No steps given for this wave. Pass args as { task, wave, steps, isGit }." }
 
 // Git-branch integrator model: mechanical merge work, so Haiku by default; the
@@ -92,6 +93,15 @@ if (badComplexity.length > 0) {
       "mechanical (Sonnet): mechanical/simple/straightforward/easy/routine/low/moderate. " +
       "substantive (Opus): substantive/substantial/complex/hard/high/nontrivial/difficult/heavy.",
   }
+}
+
+// Scream, don't guess: idx is the join key for composer picks and verifier verdicts,
+// so duplicate values silently mis-assign results. Refuse the wave rather than run it.
+const idxCounts = {}
+steps.forEach(s => { idxCounts[s.idx] = (idxCounts[s.idx] || 0) + 1 })
+const dup = Object.keys(idxCounts).filter(k => idxCounts[k] > 1)
+if (dup.length > 0) {
+  return { error: "execute-wave: duplicate step idx values (" + dup.join(", ") + ") — REFUSING to run this wave; idx is the join key for composer picks and verifier verdicts, so collisions silently mis-assign results. Give each step a unique idx and re-invoke." }
 }
 
 // Worktree isolation whenever this is a git repo — even for a single step, to keep
@@ -206,6 +216,8 @@ const implPrompt = s => {
 // ─── Implement ───
 phase("Implement")
 const impls = await parallel(steps.map(s => () => agent(implPrompt(s), implOpts(s))))
+// A crashed/empty implementer should read identically in the verify prompt and the results.
+const implReport = k => impls[k] || "(no report returned)"
 log("wave " + WAVE + ": " + steps.length + " step(s) implemented" + (useWorktrees ? " in isolated worktree(s)" : " in the shared tree (no git)"))
 
 // ─── Integrate (git only) ───
@@ -227,18 +239,23 @@ const runIntegrator = model =>
     phase: "Integrate", model, agentType: NS + "implementer", schema: INTEGRATE_SCHEMA,
   })
 const conflicted = r => r && r.conflict && r.conflict !== "none"
+// A conflict OR a null/empty result both warrant a more capable retry.
+const needsRetry = r => !r || conflicted(r)
 
 let integration = null
 if (useWorktrees) {
   phase("Integrate")
   integration = await runIntegrator(integratorModel)
-  // Scale up on conflict: a cheap merge that hit a conflict gets a more capable retry.
-  if (conflicted(integration) && integratorModel === "haiku") {
-    log("wave " + WAVE + " integrate hit a conflict on haiku — escalating to sonnet")
+  // Scale up on trouble: a cheap merge that hit a conflict or returned nothing gets a more capable retry.
+  if (needsRetry(integration) && integratorModel === "haiku") {
+    log("wave " + WAVE + " integrate " + (integration ? "hit a conflict" : "returned nothing") + " on haiku — escalating to sonnet")
     const esc = await runIntegrator("sonnet")
     if (esc) integration = esc
   }
-  log("wave " + WAVE + " integrated: " + (integration ? integration.merged + " branch(es) merged" + (conflicted(integration) ? ", CONFLICT: " + integration.conflict : "") : "integrator returned nothing"))
+  // Never leave integration null: the wave could not be confirmed merged. A non-'none'
+  // conflict here trips the coordinator's stop-on-conflict path via `conflicted`.
+  if (!integration) integration = { merged: 0, conflict: "integrator returned no result — the wave could not be confirmed merged", failed: true }
+  log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" + (conflicted(integration) ? ", CONFLICT: " + integration.conflict : ""))
 }
 
 // ─── Verify (one verifier over the whole integrated tree) ───
@@ -251,7 +268,7 @@ const waveVerdict = await agent(
     "### idx " + s.idx + " — " + s.title + "\n" +
     "Intended change: " + s.change + (s.verify ? "\nDone when: " + s.verify : "") +
     (s.files.length ? "\nFiles: " + s.files.join(", ") : "") +
-    "\nImplementer reported:\n" + (impls[k] || "(no report returned)")
+    "\nImplementer reported:\n" + implReport(k)
   ).join("\n\n") + "\n\n" + COMMS,
   { label: "verify:w" + WAVE, phase: "Verify", model: "sonnet", agentType: NS + "verifier", schema: WAVE_VERDICT_SCHEMA }
 )
@@ -264,7 +281,7 @@ const results = steps.map((s, k) => {
   log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierOf(s).name + "] (" + s.title + "): " + (v ? v.verdict : "unknown"))
   return {
     step: s.title, wave: WAVE, tier: tierOf(s).name, worktree: useWorktrees,
-    implemented: impls[k], verdict: v ? v.verdict : "unknown", evidence: v ? (v.evidence || "") : "", problems: v ? (v.problems || "") : "",
+    implemented: implReport(k), verdict: v ? v.verdict : "unknown", evidence: v ? (v.evidence || "") : "", problems: v ? (v.problems || "") : "",
     integrationConflict: conflict,
   }
 })
