@@ -99,6 +99,7 @@ const refinePrompt = aspect =>
   "If the rough plan is internally contradictory or its premise is wrong given the code, STOP and return that as a BLOCKER instead of a plan.\n\n" + COMMS
 
 // ─── Compose: pick the architect composition when the coordinator did not ───
+let compositionRationale = ""
 if (!panelSpecified) {
   phase("Compose")
   const picked = await agent(
@@ -110,13 +111,14 @@ if (!panelSpecified) {
   )
   if (picked && validModelList(picked.panelModels)) panelModels = picked.panelModels
   if (!integSpecified && picked && MODEL_SET.includes(picked.integratorModel)) integratorModel = picked.integratorModel
-  log("Composer: panel=[" + (Array.isArray(panelModels) ? panelModels.join(",") : "?") + "] integrator=" + (integratorModel || "opus") + (picked && picked.rationale ? " — " + picked.rationale : ""))
+  if (picked && picked.rationale) compositionRationale = picked.rationale
 }
 // Static fallback (composer omitted or failed): spend Fable sparingly.
 if (!validModelList(panelModels)) panelModels = LEVEL === "deep" ? ["fable", "opus", "fable"] : ["opus"]
 // Integrator defaults to the top tier PRESENT in the panel (never below Opus): once
 // a Fable panelist owns a hard aspect, a Fable integrator merges it as an equal.
 if (!MODEL_SET.includes(integratorModel)) integratorModel = panelModels.includes("fable") ? "fable" : "opus"
+log("Composition: panel=[" + panelModels.join(",") + "] integrator=" + integratorModel + (compositionRationale ? " — " + compositionRationale : ""))
 
 // ─── Refine ───
 // A multi-member panel divides the labour: each architect OWNS one aspect of the
