@@ -27,8 +27,9 @@ matters.
     need to know something about the code, dispatch a `tiered-development:reader`
     rather than reading it directly; reading code or running checks inline burns
     your context and duplicates the workforce's job. The only commands you run are
-    orchestration: probing `git rev-parse HEAD` for a wave's `baseRef`, and the
-    final integration commit/push.
+    orchestration: probing `git rev-parse --is-inside-work-tree` for `isGit` and
+    `git rev-parse HEAD` for a wave's `baseRef`, and the final integration
+    commit/push.
   - **`tiered-development:builder` (Opus)** — the primary implementer, launched
     fresh per substantive step so each gets a clean, focused context.
   - **Default thinking tier** for `architect` / `deep-reviewer` and the **floor for
