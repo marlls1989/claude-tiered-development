@@ -224,7 +224,7 @@ log("wave " + WAVE + ": " + steps.length + " step(s) implemented" + (useWorktree
 const integratePrompt = reason =>
   "## Integrate wave " + WAVE + " worktrees\n" +
   (reason === "conflict"
-    ? "A cheaper first pass reported a merge CONFLICT and aborted, leaving the tree clean. Re-attempt carefully — a cheap model may have mis-merged. If the branches genuinely conflict, abort and report EXACTLY which files/hunks conflict.\n\n"
+    ? "A cheaper first pass hit a CONFLICT and aborted, leaving the tree clean. Re-attempt carefully — a cheap model may have mis-merged. If the branches genuinely conflict, abort and report EXACTLY which files/hunks conflict.\n\n"
     : reason === "nothing"
     ? "A cheaper first pass returned NO result and may have left the working tree mid-merge, dirty, or with some branches already merged. BEFORE integrating anything, run `git status`; if a merge or rebase is in progress, complete it or abort it (`git merge --abort` / `git rebase --abort`) and reconcile any partial state; only then proceed with the remaining un-merged branches. If the tree state is unclear or cannot be made clean, STOP and report a BLOCKER rather than guessing.\n\n"
     : "") +
