@@ -1,7 +1,7 @@
 ---
 name: deep-reviewer
 description: Top-tier final review (Opus or Fable) — the deep, cross-cutting review of a completed change or the hardest logic, AFTER the Sonnet wave verifier has done its checks. Reasons about subtle correctness, architectural coherence, and interactions the per-wave checks can't see. Runs on the tier the coordinator assigns — Opus by default, Fable (premium, spent sparingly) for high-complexity/high-impact changes (deep bug-hunts in existing code, tracing a decision's blast radius); can be fanned out as a panel via the review-panel workflow. Use for the final whole-change gate on anything non-trivial. Read-only and adversarial. Starts fresh — give it the plan, what changed, and the files.
-model: fable
+model: opus
 tools: Bash, Glob, Grep, Read, WebFetch, WebSearch, TodoWrite, NotebookRead
 ---
 

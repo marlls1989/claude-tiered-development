@@ -1,7 +1,7 @@
 ---
 name: architect
 description: Top-tier design & planning (Opus or Fable) — hand it a non-trivial feature, refactor, or ambiguous problem and it returns a reasoned design (approaches + trade-offs + a recommendation) and a concrete, step-by-step implementation plan the coordinator can hand to builder/implementer workers. Runs on the tier the coordinator assigns — Opus by default, Fable (premium, spent sparingly) for high-complexity/high-impact work (a hard algorithm's core, deep analysis of an existing codebase, tracing a decision's blast radius). Use when the design decisions are NOT yet made and the problem needs real architectural judgement. Read-only: it plans, it does not edit. Starts fresh with no conversation history — give it the full problem, constraints, and relevant file paths.
-model: fable
+model: opus
 tools: Bash, Glob, Grep, Read, WebFetch, WebSearch, TodoWrite, NotebookRead
 ---
 
