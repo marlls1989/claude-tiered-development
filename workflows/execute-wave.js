@@ -221,9 +221,13 @@ const implReport = k => impls[k] || "(no report returned)"
 log("wave " + WAVE + ": " + steps.length + " step(s) implemented" + (useWorktrees ? " in isolated worktree(s)" : " in the shared tree (no git)"))
 
 // ─── Integrate (git only) ───
-const integratePrompt = escalated =>
+const integratePrompt = reason =>
   "## Integrate wave " + WAVE + " worktrees\n" +
-  (escalated ? "A cheaper first pass reported a merge CONFLICT and aborted, leaving the tree clean. Re-attempt carefully — a cheap model may have mis-merged. If the branches genuinely conflict, abort and report EXACTLY which files/hunks conflict.\n\n" : "") +
+  (reason === "conflict"
+    ? "A cheaper first pass reported a merge CONFLICT and aborted, leaving the tree clean. Re-attempt carefully — a cheap model may have mis-merged. If the branches genuinely conflict, abort and report EXACTLY which files/hunks conflict.\n\n"
+    : reason === "nothing"
+    ? "A cheaper first pass returned NO result and may have left the working tree mid-merge, dirty, or with some branches already merged. BEFORE merging anything, run `git status`; if a merge is in progress, complete or `git merge --abort` it and reconcile any partial state; only then proceed with the remaining un-merged branches. If the tree state is unclear or cannot be made clean, STOP and report a BLOCKER rather than guessing.\n\n"
+    : "") +
   "The implementation step(s) below ran each in its own git worktree under `.claude/worktrees/`, each committing its change on its own branch. They were designed to touch DISJOINT files, so the merges must be conflict-free.\n\n" +
   "The step(s) in this wave and the files each was to touch:\n" +
   steps.map(s => "- " + s.title + (s.files && s.files.length ? " → " + s.files.join(", ") : " → (unspecified)")).join("\n") + "\n\n" +
@@ -233,8 +237,8 @@ const integratePrompt = escalated =>
   "3. If any merge reports a conflict, run `git merge --abort` and STOP: report the conflicting files as a BLOCKER (a conflict means the steps were not actually file-disjoint). Do not try to resolve it.\n" +
   "4. After each clean merge, remove that worktree with `git worktree remove <path>` and delete its now-merged branch.\n\n" +
   "Report how many branches you merged and any conflict.\n\n" + COMMS
-const runIntegrator = model =>
-  agent(integratePrompt(model !== integratorModel), {
+const runIntegrator = (model, reason) =>
+  agent(integratePrompt(reason), {
     label: "integrate:w" + WAVE + (model !== integratorModel ? ":" + model : ""),
     phase: "Integrate", model, agentType: NS + "implementer", schema: INTEGRATE_SCHEMA,
   })
@@ -245,15 +249,16 @@ const needsRetry = r => !r || conflicted(r)
 let integration = null
 if (useWorktrees) {
   phase("Integrate")
-  integration = await runIntegrator(integratorModel)
+  integration = await runIntegrator(integratorModel, null)
   // Scale up on trouble: a cheap merge that hit a conflict or returned nothing gets a more capable retry.
   if (needsRetry(integration) && integratorModel === "haiku") {
     log("wave " + WAVE + " integrate " + (integration ? "hit a conflict" : "returned nothing") + " on haiku — escalating to sonnet")
-    const esc = await runIntegrator("sonnet")
+    const esc = await runIntegrator("sonnet", conflicted(integration) ? "conflict" : "nothing")
     if (esc) integration = esc
   }
   // Never leave integration null: the wave could not be confirmed merged. A non-'none'
   // conflict here trips the coordinator's stop-on-conflict path via `conflicted`.
+  // merged:0 is a floor, not a fact: a crashed integrator may have merged some branches before dying, so this understates the true count. `failed:true` — not the conflict string — is the authoritative crash signal; downstream should key on `failed`, not a conflict-string match.
   if (!integration) integration = { merged: 0, conflict: "integrator returned no result — the wave could not be confirmed merged", failed: true }
   log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" + (conflicted(integration) ? ", CONFLICT: " + integration.conflict : ""))
 }
