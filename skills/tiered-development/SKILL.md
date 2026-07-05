@@ -78,7 +78,9 @@ pipeline depends on.
 ### 2. Refine the rough plan — via `tiered-development:design-panel`
 
 Hand the rough plan to the architect(s) to turn into a concrete, dispatchable,
-wave-grouped plan:
+wave-grouped plan. **Call `EnterPlanMode` as you dispatch design-panel** —
+design-panel is read-only so plan mode permits it, and this makes the step-3
+approval gate harness-enforced (no edit can slip through before the user says go):
 
 ```
 Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })
@@ -110,10 +112,11 @@ the user before proceeding.
 
 ### 3. GATE — the user approves
 
-Present the design (recommendation, rationale, risks) and the numbered, waved plan
-to the user, then **stop and ask them to approve or adjust before any edit is
-made.** This honours the user's standing "plan before changes" rule. Do not run a
-single wave until the user says go. This gate is the reason this skill exists
+Present the refined design (recommendation, rationale, risks) and the numbered,
+waved plan to the user, then **call `ExitPlanMode`** — the user's response to it
+*is* the approval gate. This honours the user's standing "plan before changes"
+rule. `ExitPlanMode` must precede step 4, since `execute-wave` makes edits; do not
+run a single wave until the user approves. This gate is the reason this skill exists
 rather than an autonomous workflow — never skip it.
 
 ### 4. Execute — one wave at a time, via `tiered-development:execute-wave`
@@ -155,12 +158,18 @@ with false diagnostics. Outside git it falls back to sequential edits in the sha
 `execute-wave` returns `{ wave, results, integration }`. **React between waves —
 this is why you call it per wave rather than handing over the whole plan:**
 
-- If a step returns a `BLOCKER` or a question, resolve it yourself or escalate the
-  step back to `tiered-development:architect` (Opus, or Fable if it warrants the
-  cost) for a design decision. Never silently downgrade a judgement call by guessing
-  on a worker's behalf.
-- If `integration.conflict` is not `none`, the wave's steps were not actually
-  file-disjoint. Stop, inspect, and re-plan that boundary before continuing.
+- If a step returns a `BLOCKER` or a question, apply the **## Escalation rule** below.
+- If the wave verifier returns `fail` or `needs-changes` on a step (it ran cleanly
+  but the result is wrong — not a `BLOCKER`), do **not** advance the wave. Spin a
+  targeted fix-up: re-dispatch that one step as its own single-step wave via
+  `tiered-development:execute-wave`, escalating its tier (send it to
+  `tiered-development:architect` if the fix needs a design decision), and re-verify
+  before moving on.
+- If `integration.conflict` is not `none` **or** `integration.failed` is set, stop
+  and inspect. A conflict means the wave's steps were not actually file-disjoint —
+  re-plan that boundary. `failed` means the integrator returned no result and could
+  not confirm the merge (a crashed integrator, distinct from a genuine file-overlap
+  conflict) — inspect the tree before continuing.
 - If a step you routed to Sonnet turns out to need judgement, re-route it to a
   `tiered-development:builder` rather than accepting a guessed result.
 
@@ -186,6 +195,11 @@ relay the verdict to the user. Two ways, scale to the change:
   the Sonnet composer pick. Returns `{ review: { verdict, evidence, problems } }`.
 - **Light** — a single `tiered-development:deep-reviewer` inline via the `Agent` tool
   (pick `model: opus`, or `fable` if it warrants the cost). No fan-out, no workflow.
+
+**If the verdict is not `pass`, do not proceed to step 6.** Loop back: spin a
+targeted fix-up wave for the flagged steps (via `tiered-development:execute-wave`,
+escalating tier as needed), or re-plan via `tiered-development:design-panel` if the
+design itself is wrong — then re-review. Only a `pass` advances to Integrate.
 
 ### 6. Integrate
 
