@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: "Compose", detail: "Only when a step's tier is unspecified: a Sonnet composer picks menial/mechanical/substantive per step", model: "sonnet" },
     { title: "Implement", detail: "Each step runs in its own worktree: Haiku (menial) / Sonnet (mechanical) implementer or Opus builder (substantive)", model: "opus" },
-    { title: "Integrate", detail: "Git integrator merges the wave's worktree branches back; Haiku by default, escalating to Sonnet on conflict or a failed (no-result) pass", model: "haiku" },
+    { title: "Integrate", detail: "Git integrator rebases the wave's worktree branches onto the working branch (linear history); Haiku by default, escalating to Sonnet on conflict or a failed (no-result) pass", model: "haiku" },
     { title: "Verify", detail: "A single Sonnet verifier checks all the wave's steps against the integrated tree", model: "sonnet" },
   ],
 }
@@ -226,17 +226,17 @@ const integratePrompt = reason =>
   (reason === "conflict"
     ? "A cheaper first pass reported a merge CONFLICT and aborted, leaving the tree clean. Re-attempt carefully — a cheap model may have mis-merged. If the branches genuinely conflict, abort and report EXACTLY which files/hunks conflict.\n\n"
     : reason === "nothing"
-    ? "A cheaper first pass returned NO result and may have left the working tree mid-merge, dirty, or with some branches already merged. BEFORE merging anything, run `git status`; if a merge is in progress, complete or `git merge --abort` it and reconcile any partial state; only then proceed with the remaining un-merged branches. If the tree state is unclear or cannot be made clean, STOP and report a BLOCKER rather than guessing.\n\n"
+    ? "A cheaper first pass returned NO result and may have left the working tree mid-merge, dirty, or with some branches already merged. BEFORE integrating anything, run `git status`; if a merge or rebase is in progress, complete it or abort it (`git merge --abort` / `git rebase --abort`) and reconcile any partial state; only then proceed with the remaining un-merged branches. If the tree state is unclear or cannot be made clean, STOP and report a BLOCKER rather than guessing.\n\n"
     : "") +
-  "The implementation step(s) below ran each in its own git worktree under `.claude/worktrees/`, each committing its change on its own branch. They were designed to touch DISJOINT files, so the merges must be conflict-free.\n\n" +
+  "The implementation step(s) below ran each in its own git worktree under `.claude/worktrees/`, each committing its change on its own branch. They were designed to touch DISJOINT files, so rebasing them onto the working branch must be conflict-free.\n\n" +
   "The step(s) in this wave and the files each was to touch:\n" +
   steps.map(s => "- " + s.title + (s.files && s.files.length ? " → " + s.files.join(", ") : " → (unspecified)")).join("\n") + "\n\n" +
   "Do exactly this, from the main working tree (not a worktree):\n" +
   "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on.\n" +
-  "2. For each such worktree whose branch has commits ahead of the current branch, merge that branch into the current working branch with `git merge --no-ff <branch>`.\n" +
-  "3. If any merge reports a conflict, run `git merge --abort` and STOP: report the conflicting files as a BLOCKER (a conflict means the steps were not actually file-disjoint). Do not try to resolve it.\n" +
-  "4. After each clean merge, remove that worktree with `git worktree remove <path>` and delete its now-merged branch.\n\n" +
-  "Report how many branches you merged and any conflict.\n\n" + COMMS
+  "2. Integrate them ONE AT A TIME, keeping history LINEAR (do NOT create merge commits): for each worktree whose branch is ahead of the current working branch, first replay that branch onto the up-to-date working branch by running, from inside the worktree, `git -C <worktree-path> rebase <current-branch>`; then, from the main working tree, fast-forward with `git merge --ff-only <branch>`.\n" +
+  "3. If the rebase reports a conflict, run `git -C <worktree-path> rebase --abort` and STOP: report the conflicting files as a BLOCKER (a conflict means the steps were not actually file-disjoint). Do not try to resolve it.\n" +
+  "4. After each successful fast-forward, remove that worktree with `git worktree remove <path>` and delete its now-integrated branch.\n\n" +
+  "Report how many branches you integrated and any conflict.\n\n" + COMMS
 const runIntegrator = (model, reason) =>
   agent(integratePrompt(reason), {
     label: "integrate:w" + WAVE + (model !== integratorModel ? ":" + model : ""),
