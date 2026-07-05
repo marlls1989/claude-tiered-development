@@ -125,12 +125,12 @@ if (candidates.length > 1 || integSpecified) {
 }
 
 if (!review || !review.verdict) {
-  return { error: "Review failed to produce a verdict.", candidates }
+  return { error: "Review failed to produce a verdict.", candidates: candidates.map(({ _lens, ...rest }) => rest) }
 }
 log("Review verdict: " + review.verdict)
 
 return {
   level: LEVEL,
   review: { verdict: review.verdict, evidence: review.evidence || "", problems: review.problems || "none" },
-  candidates,
+  candidates: candidates.map(({ _lens, ...rest }) => rest),
 }
