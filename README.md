@@ -87,7 +87,7 @@ Fable sparingly.
   aspect** (each owns correctness / architecture / decomposition / verification /
   risk). The plan `integratorModel` is **≥Opus, never Sonnet**, and **defaults to the
   panel's top tier** (Fable if any panelist is Fable). Called as
-  `Workflow({ name: "design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })`;
+  `Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })`;
   returns `{ design, plan, waves }`.
 - **`execute-wave`** — runs one wave: each step in **its own git worktree**, routed
   by its three-tier `complexity` (substantive → Opus `builder`, mechanical → Sonnet,
@@ -97,12 +97,16 @@ Fable sparingly.
   **every** step in a git repo — even a single sequential one — so the workers'
   in-progress edits never flood the coordinator's language server with false
   diagnostics; outside git it falls back to sequential edits in the shared tree.
-  Called as `Workflow({ name: "execute-wave", args: { task, wave, steps, isGit } })`
+  The harness cuts each worker's isolation worktree from the repo's **default**
+  branch, not the checked-out one — so `baseRef` (the current HEAD, re-probed each
+  wave) is what carries the checked-out branch and prior waves' results to the
+  workers. Called as
+  `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, integratorModel } })`
   once per wave.
 - **`review-panel`** — the deep final review: a fan-out of reviewers (each on a
   distinct lens) closed by a ≥Opus integrator that merges them into ONE verdict
   (most severe wins). `reviewModels` + `integratorModel` mirror `design-panel`.
-  Called as `Workflow({ name: "review-panel", args: { level, task, design, changed, files, reviewModels, integratorModel } })`;
+  Called as `Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, reviewModels, integratorModel } })`;
   returns `{ review: { verdict, evidence, problems } }`.
 
 ### Comms protocol (`skills/tiered-development/comms-protocol.md`)
@@ -139,7 +143,7 @@ cp -r workflows/* ~/.claude/workflows/
 
 - **Models.** Uses the `fable`, `opus`, `sonnet`, and `haiku` model aliases. Fable
   is Anthropic's top tier and now bills extra per use, so it is **opt-in** — the
-  `architect` / `deep-reviewer` default to `fable` in frontmatter but design-panel /
+  `architect` / `deep-reviewer` default to `opus` in frontmatter but design-panel /
   review-panel run on whatever `panelModels`/`reviewModels` + `integratorModel` you
   pass (Opus-only compositions never touch Fable). The flow runs end-to-end on
   Opus + Sonnet + Haiku alone.
