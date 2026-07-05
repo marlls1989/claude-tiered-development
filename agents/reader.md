@@ -1,6 +1,6 @@
 ---
 name: reader
-description: Read-only exploration on Sonnet — searches and reads files to answer a specific question and returns a digest, so the Opus coordinator spends its quota reasoning about the answer rather than ingesting files. Dispatch whenever answering something needs reading code/config first. Give it a precise question; it starts fresh with no conversation history.
+description: Read-only exploration (Sonnet, or Haiku for cheap lookups) — searches and reads files to answer a specific question and returns a digest, so the Opus coordinator spends its quota reasoning about the answer rather than ingesting files. Dispatch whenever answering something needs reading code/config first. Give it a precise question; it starts fresh with no conversation history.
 model: sonnet
 tools: Bash, Glob, Grep, Read, WebFetch, WebSearch, TodoWrite, NotebookRead
 ---

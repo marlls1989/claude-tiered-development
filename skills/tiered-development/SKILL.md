@@ -1,6 +1,6 @@
 ---
 name: tiered-development
-description: Use when tackling a non-trivial feature, refactor, or design problem and you want the work delegated across model tiers instead of done inline — "design and build X", "plan then implement Y the tiered way", "delegate this properly". You (the Opus coordinator) draft a rough plan WITH the user via brainstorming, hand it to Fable to refine into a waved plan, pause for the user's approval, then run each wave through the execute-wave workflow — fresh Opus builders for substantive steps, Sonnet implementers for mechanical ones, each in its own git worktree — and close with a Fable deep review. NOT for trivial one-line edits (just do those) or whole-repo review (use full-project-review).
+description: Use when tackling a non-trivial feature, refactor, or design problem and you want the work delegated across model tiers instead of done inline — "design and build X", "plan then implement Y the tiered way", "delegate this properly". You (the Opus coordinator) draft a rough plan WITH the user via brainstorming, hand it to design-panel (Opus and/or Fable architect(s), your choice) to refine into a waved plan, pause for the user's approval, then run each wave through the execute-wave workflow — fresh Opus builders for substantive steps, Sonnet for mechanical, Haiku for menial, each in its own git worktree — and close with a deep review (review-panel). NOT for trivial one-line edits (just do those) or whole-repo review (use full-project-review).
 ---
 
 # Tiered Development
@@ -12,16 +12,33 @@ Opus coordinator) orchestrating and the user in the loop at the one gate that
 matters.
 
 - **Fable** (`tiered-development:architect`, `tiered-development:deep-reviewer`) —
-  the hardest thinking: refining the plan and the final deep review of subtle logic.
-- **Opus** — two roles, kept separate on purpose:
+  the strongest tier. It now **bills extra per use**, so spend it **sparingly** and by
+  the right criterion: not "hard design decisions" but **complexity and impact** — the
+  core of a hard algorithm, deep analysis of a large/existing codebase, hunting subtle
+  long-standing bugs, or tracing the blast radius of a decision. Once Fable owns a
+  panel aspect, integrate that panel with Fable too.
+- **Opus** — three uses:
   - **You, the coordinator** — orchestration only: brainstorm with the user,
     route work, keep them in the loop, decide between tiers. Keep your own context
     lean; do NOT implement inline.
   - **`tiered-development:builder` (Opus)** — the primary implementer, launched
     fresh per substantive step so each gets a clean, focused context.
+  - **Default thinking tier** for `architect` / `deep-reviewer` and the **floor for
+    the plan/verdict integrator** (never below Opus) — Fable's stand-in.
 - **Sonnet** (`tiered-development:reader`, `tiered-development:implementer`,
-  `tiered-development:verifier`) — the cheap workforce: read-only research,
-  mechanical edits, and per-step verification.
+  `tiered-development:verifier`) — the workforce: read-only research, mechanical
+  edits, the per-wave verifier, the tier **composer**, and the git integrator on conflict.
+- **Haiku** — the floor for genuinely menial work: `implementer` on menial steps,
+  the git integrator by default, and cheap `reader` lookups.
+
+**Selection principle — how to pick a tier.** Pick the cheapest tier that will
+reliably get it right, weighing the judgement the step needs against the cost of a
+wrong result (subtle, hard-to-catch, wide blast radius). Menial, obvious-if-wrong
+edit → Haiku. Routine mechanical work → Sonnet. Judgement, or an expensive silent
+error → Opus. Fable only for high-complexity or high-impact work (deep bug-hunts in
+existing code, blast-radius analysis), since it bills extra. Err upward when a
+mistake would be costly. You *may* set tiers explicitly, or omit them and let a cheap
+Sonnet composer decide.
 
 **Why delegate instead of doing it yourself:** every implementation task goes to a
 freshly-spawned agent with only the context that task needs. That focus — not the
@@ -29,13 +46,14 @@ coordinator juggling the whole job in one crowded context — is what raises cod
 quality. Your job is to slice the work cleanly and route each slice to the right
 tier.
 
-You drive this. Two phases with real fan-out are extracted into small workflows
-you **call** — `tiered-development:design-panel` (refine the plan) and
-`tiered-development:execute-wave` (build one wave) — because a script runs their
+You drive this. The phases with real fan-out are extracted into small workflows
+you **call** — `tiered-development:design-panel` (refine the plan),
+`tiered-development:execute-wave` (build one wave), and
+`tiered-development:review-panel` (final deep review) — because a script runs their
 parallelism better than you can by hand. Always invoke them by these
-fully-qualified names; the bare `design-panel` / `execute-wave` do not resolve.
-Everything else — the brainstorm, the approval gate, routing, escalation, the
-deep review — stays here, with you.
+fully-qualified names; the bare `design-panel` / `execute-wave` / `review-panel` do
+not resolve. Everything else — the brainstorm, the approval gate, routing,
+escalation — stays here, with you.
 
 **Namespacing (required).** Every agent and workflow shipped by this plugin is
 registered under the `tiered-development:` prefix. Whenever you dispatch one — as
@@ -53,29 +71,42 @@ Draft the approach and a rough set of steps *together with the user*. Use
 `superpowers:brainstorming` to drive the dialogue, and dispatch
 `tiered-development:reader` (Sonnet) agents to ground the discussion in what the code actually does before you commit
 to an approach. The output of this phase is a **rough plan**: the chosen approach
-plus a rough list of steps. It does not need to be dispatchable yet — Fable
-refines it next. Getting the user's intent right here is what the whole pipeline
-depends on.
+plus a rough list of steps. It does not need to be dispatchable yet — the
+architect(s) refine it next. Getting the user's intent right here is what the whole
+pipeline depends on.
 
-### 2. Refine the rough plan — Fable, via `tiered-development:design-panel`
+### 2. Refine the rough plan — via `tiered-development:design-panel`
 
-Hand the rough plan to Fable to turn into a concrete, dispatchable, wave-grouped
-plan:
+Hand the rough plan to the architect(s) to turn into a concrete, dispatchable,
+wave-grouped plan:
 
 ```
-Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan } })
+Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })
 ```
 
-- `level` is `quick` | `standard` | `deep` — `deep` runs a 3-architect panel plus
-  a synthesis; `quick`/`standard` use a single architect. Scale it to the task.
-- `task` is the task description; `roughPlan` is what you and the user drafted in
-  step 1.
+- `level` is `quick` | `standard` | `deep` — sets the plan's step budget. Scale it to the task.
+- `task` is the task description; `roughPlan` is what you and the user drafted in step 1.
+- **`panelModels`** (optional) — a 1–5 array of `"opus"`/`"fable"`, one architect
+  each: `["opus"]` a single Opus refine, `["opus","opus","opus"]` an Opus panel,
+  `["fable","opus","fable"]` a mixed panel. On a multi-member panel the architects
+  **divide the labour by aspect** (correctness, architecture, decomposition,
+  verification, risk) — each owns one, with the whole plan for context — rather than
+  each redundantly re-refining everything.
+- **`integratorModel`** (optional, `"opus"`|`"fable"` — **never Sonnet**) — the model
+  that merges the aspect-refined plans into the final one. **Defaults to the top tier
+  present in the panel**, so a panel containing Fable integrates with Fable
+  automatically (once Fable owns a hard aspect, an equal must merge it). The two-tier
+  pattern — an Opus panel then a Fable integrator (`panelModels:["opus","opus","opus"],
+  integratorModel:"fable"`) — puts Fable on the *final* design only.
+- **Omit both** to let a cheap Sonnet composer pick the composition (Opus-leaning,
+  Fable only for high complexity/impact). Set them when you want control.
 
 It returns `{ design, plan, waves }` — `design` is `{ recommendation, rationale,
 risks }`; `plan` is an array of steps, each `{ idx, title, files, change,
-complexity, wave, verify }`, already grouped into ascending file-disjoint waves.
-If it returns a `BLOCKER` instead (the rough plan was contradictory or its premise
-is wrong), resolve it with the user before proceeding.
+complexity, wave, verify }` (complexity ∈ `menial`|`mechanical`|`substantive`),
+already grouped into ascending file-disjoint waves. If it returns a `BLOCKER`
+instead (the rough plan was contradictory or its premise is wrong), resolve it with
+the user before proceeding.
 
 ### 3. GATE — the user approves
 
@@ -93,12 +124,18 @@ ascending order, **re-probe `git rev-parse HEAD`** to get the current branch tip
 run:
 
 ```
-Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef } })
+Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, integratorModel } })
 ```
 
-- `steps` is just this wave's steps (filter the plan by `wave`).
+- `steps` is just this wave's steps (filter the plan by `wave`). Each carries a
+  three-tier `complexity` (`menial`→Haiku / `mechanical`→Sonnet / `substantive`→Opus).
+  **Leave a step's `complexity` blank to let a Sonnet composer pick its tier**; a
+  *garbage* value is refused loudly (fix it), but absence just means "you decide".
 - `isGit` is your first probe result; `totalSteps` is the whole plan's step count
   (for nicer labels).
+- `integratorModel` (optional, `"haiku"`|`"sonnet"`) — the git-branch integrator.
+  Defaults to **Haiku**, escalating to Sonnet automatically on conflict; override only
+  to pin it. (This is the *git* integrator — distinct from the ≥Opus plan integrator.)
 - `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's
   isolation worktree from the repo's **default branch**, not your checked-out branch,
   so the workers reset onto `baseRef` to build on the right foundation. **Re-probe it
@@ -106,20 +143,22 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
   passing the fresh tip is what carries the prior waves' results into the next one.
 
 Each wave's steps run **in parallel, each in its own git worktree** (substantive →
-Opus `tiered-development:builder`, mechanical → Sonnet
-`tiered-development:implementer`); an integrator merges the wave's branches back
-into your working tree; then a `tiered-development:verifier` checks each step.
-Worktrees are used for **every** step in a git repo — even a single sequential
-step — so the workers' in-progress, transiently-broken edits never reach your tree
-and never flood your language server with false diagnostics. Outside git it falls
-back to sequential edits in the shared tree.
+Opus `tiered-development:builder`, mechanical/menial → Sonnet/Haiku
+`tiered-development:implementer`); a git integrator merges the wave's branches back
+into your working tree; then a **single** `tiered-development:verifier` checks all
+the wave's steps against the integrated tree (one verifier, not one per step, so it
+also catches interactions between them). Worktrees are used for **every** step in a
+git repo — even a single sequential step — so the workers' in-progress,
+transiently-broken edits never reach your tree and never flood your language server
+with false diagnostics. Outside git it falls back to sequential edits in the shared tree.
 
 `execute-wave` returns `{ wave, results, integration }`. **React between waves —
 this is why you call it per wave rather than handing over the whole plan:**
 
 - If a step returns a `BLOCKER` or a question, resolve it yourself or escalate the
-  step back to `tiered-development:architect` (Fable) for a design decision. Never
-  silently downgrade a judgement call by guessing on a worker's behalf.
+  step back to `tiered-development:architect` (Opus, or Fable if it warrants the
+  cost) for a design decision. Never silently downgrade a judgement call by guessing
+  on a worker's behalf.
 - If `integration.conflict` is not `none`, the wave's steps were not actually
   file-disjoint. Stop, inspect, and re-plan that boundary before continuing.
 - If a step you routed to Sonnet turns out to need judgement, re-route it to a
@@ -128,13 +167,25 @@ this is why you call it per wave rather than handing over the whole plan:**
 Only move to the next wave once the current one is integrated and clean, so the
 next wave sees the settled result.
 
-### 5. Final deep review — Fable, inline
+### 5. Final deep review
 
-Once the whole change is assembled, dispatch `tiered-development:deep-reviewer`
-(Fable) directly with the `Agent` tool — a single agent, no fan-out, so no workflow. Give it the task,
-the approved design, and what changed. It does the cross-cutting review the
-per-step verifiers cannot (especially interactions between steps built in
-isolation). Relay its verdict to the user.
+Once the whole change is assembled, run the cross-cutting review the per-wave
+verifiers cannot (especially interactions between steps built in isolation), then
+relay the verdict to the user. Two ways, scale to the change:
+
+- **Deep / high-stakes** — `tiered-development:review-panel`, mirroring design-panel:
+
+  ```
+  Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, reviewModels, integratorModel } })
+  ```
+
+  `reviewModels` (1–5 of `"opus"`/`"fable"`) fans out reviewers on distinct lenses;
+  `integratorModel` (`"opus"`|`"fable"`, **never Sonnet**) merges them into one
+  verdict (most severe wins). The two-tier pattern (`reviewModels:["opus","opus"],
+  integratorModel:"fable"`) puts Fable on the *final* verdict only. Omit both to let
+  the Sonnet composer pick. Returns `{ review: { verdict, evidence, problems } }`.
+- **Light** — a single `tiered-development:deep-reviewer` inline via the `Agent` tool
+  (pick `model: opus`, or `fable` if it warrants the cost). No fan-out, no workflow.
 
 ### 6. Integrate
 
@@ -143,7 +194,7 @@ prompts.
 
 ## Communication — keep it token-lean
 
-Every agent you dispatch, and every `agent()` call inside the two workflows,
+Every agent you dispatch, and every `agent()` call inside the workflows,
 follows `skills/tiered-development/comms-protocol.md`: returns are structured data,
 not prose — terse, `path:line`-cited, verbatim on error strings / commands /
 verdict keywords / `BLOCKER` / `QUESTION`, and never compressed where a
@@ -153,10 +204,11 @@ a restatement of the task.
 
 ## Escalation rule
 
-If a Sonnet worker returns `BLOCKER`, ambiguous, or a question rather than a
-result, resolve it yourself or escalate the step back to
-`tiered-development:architect` (Fable) for a design decision. Never silently downgrade a judgement call to the cheap tier by
-guessing on the worker's behalf — that defeats the whole arrangement.
+If a Sonnet or Haiku worker returns `BLOCKER`, ambiguous, or a question rather than
+a result, resolve it yourself or escalate the step back to
+`tiered-development:architect` (Opus, or Fable if it warrants the cost) for a design
+decision. Never silently downgrade a judgement call to a cheaper tier by guessing on
+the worker's behalf — that defeats the whole arrangement.
 
 ## Workspaces: why worktrees
 
