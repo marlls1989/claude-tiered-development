@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: "Compose", detail: "Only when a step's tier is unspecified: a Sonnet composer picks menial/mechanical/substantive per step", model: "sonnet" },
     { title: "Implement", detail: "Each step runs in its own worktree: Haiku (menial) / Sonnet (mechanical) implementer or Opus builder (substantive)", model: "opus" },
-    { title: "Integrate", detail: "Git integrator merges the wave's worktree branches back; Haiku by default, escalating to Sonnet on conflict", model: "haiku" },
+    { title: "Integrate", detail: "Git integrator merges the wave's worktree branches back; Haiku by default, escalating to Sonnet on conflict or a failed (no-result) pass", model: "haiku" },
     { title: "Verify", detail: "A single Sonnet verifier checks all the wave's steps against the integrated tree", model: "sonnet" },
   ],
 }
