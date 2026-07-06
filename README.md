@@ -22,13 +22,12 @@ cost of getting it wrong.
         ┌───────────────────────── Sonnet ─────────────────────────────┐
         │  implementer     mechanical edits                            │
         │  reader          read-only research → digest                 │
-        │  verifier        one adversarial check per wave              │
-        │  composer        picks tiers when you don't; git merge retry │
+        │  verifier        merge + resolve, then verify per wave       │
+        │  composer        picks tiers when you don't                  │
         └──────────────────────────────────────────────────────────────┘
-                              ▲  git merge          menial ▼
+                              ▲  results            menial ▼
         ┌───────────────────────── Haiku ──────────────────────────────┐
         │  implementer     menial edits                                │
-        │  git integrator  merge worktree branches (→ Sonnet on conflict)│
         └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -49,7 +48,7 @@ fresh Opus/Sonnet/Haiku workers each build one well-scoped slice in its own work
 | `builder` | Opus | Primary implementer of substantive, judgement-requiring code. May decide the *how*, never re-opens the design. |
 | `implementer` | Sonnet / Haiku | Mechanical (Sonnet) or menial (Haiku) execution of a single precise step. No design judgement. |
 | `reader` | Sonnet / Haiku | Read-only research; returns a cited digest, not raw file dumps. |
-| `verifier` | Sonnet | One adversarial check per wave, against the integrated tree and the plan's stated intent. |
+| `verifier` | Sonnet | Merges the wave's worktree branches back (resolving conflicts in place), then one adversarial check per wave against the integrated tree and the plan's stated intent — diffing against the kept worktrees to pinpoint merge-caused faults. |
 
 ### Skill (`skills/tiered-development/`)
 
@@ -91,9 +90,9 @@ Fable sparingly.
   returns `{ design, plan, waves }`.
 - **`execute-wave`** — runs one wave: each step in **its own git worktree**, routed
   by its three-tier `complexity` (substantive → Opus `builder`, mechanical → Sonnet,
-  menial → Haiku `implementer`); a **git integrator** merges the wave's branches back
-  (Haiku by default, escalating to Sonnet on conflict); then a **single** `verifier`
-  checks all the wave's steps against the integrated tree. Worktrees are used for
+  menial → Haiku `implementer`); then a **single** Sonnet `verifier` merges the
+  wave's branches back — resolving any conflict in place — and checks all the wave's
+  steps against the integrated tree. Worktrees are used for
   **every** step in a git repo — even a single sequential one — so the workers'
   in-progress edits never flood the coordinator's language server with false
   diagnostics; outside git it falls back to sequential edits in the shared tree.
@@ -101,7 +100,7 @@ Fable sparingly.
   branch, not the checked-out one — so `baseRef` (the current HEAD, re-probed each
   wave) is what carries the checked-out branch and prior waves' results to the
   workers. Called as
-  `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, integratorModel } })`
+  `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef } })`
   once per wave.
 - **`review-panel`** — the deep final review: a fan-out of reviewers (each on a
   distinct lens) closed by a ≥Opus integrator that merges them into ONE verdict

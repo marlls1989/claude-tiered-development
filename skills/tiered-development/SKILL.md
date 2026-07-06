@@ -36,9 +36,10 @@ matters.
     the plan/verdict integrator** (never below Opus) — Fable's stand-in.
 - **Sonnet** (`tiered-development:reader`, `tiered-development:implementer`,
   `tiered-development:verifier`) — the workforce: read-only research, mechanical
-  edits, the per-wave verifier, the tier **composer**, and the git integrator on conflict.
-- **Haiku** — the floor for genuinely menial work: `implementer` on menial steps,
-  the git integrator by default, and cheap `reader` lookups.
+  edits, the per-wave integrator/verifier (which merges the wave's branches back,
+  resolving conflicts in place, then verifies), and the tier **composer**.
+- **Haiku** — the floor for genuinely menial work: `implementer` on menial steps
+  and cheap `reader` lookups.
 
 **Selection principle — how to pick a tier.** Pick the cheapest tier that will
 reliably get it right, weighing the judgement the step needs against the cost of a
@@ -138,7 +139,7 @@ ascending order, **re-probe `git rev-parse HEAD`** to get the current branch tip
 run:
 
 ```
-Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, integratorModel } })
+Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef } })
 ```
 
 - `steps` is just this wave's steps (filter the plan by `wave`). Each carries a
@@ -147,22 +148,20 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
   *garbage* value is refused loudly (fix it), but absence just means "you decide".
 - `isGit` is your first probe result; `totalSteps` is the whole plan's step count
   (for nicer labels).
-- `integratorModel` (optional, `"haiku"`|`"sonnet"`) — the git-branch integrator.
-  Defaults to **Haiku**, escalating to Sonnet automatically on conflict or if the
-  Haiku pass returns no result (a failed pass); override only
-  to pin it. (This is the *git* integrator — distinct from the ≥Opus plan integrator.)
 - `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's
   isolation worktree from the repo's **default branch**, not your checked-out branch,
   so the workers reset onto `baseRef` to build on the right foundation. **Re-probe it
-  every wave** — the integrator advances your branch as each wave merges in, so
+  every wave** — the integrator/verifier advances your branch as each wave merges in, so
   passing the fresh tip is what carries the prior waves' results into the next one.
 
 Each wave's steps run **in parallel, each in its own git worktree** (substantive →
 Opus `tiered-development:builder`, mechanical/menial → Sonnet/Haiku
-`tiered-development:implementer`); a git integrator merges the wave's branches back
-into your working tree; then a **single** `tiered-development:verifier` checks all
-the wave's steps against the integrated tree (one verifier, not one per step, so it
-also catches interactions between them). Worktrees are used for **every** step in a
+`tiered-development:implementer`); then a **single** Sonnet
+`tiered-development:verifier` merges the wave's branches back into your working tree
+— resolving any conflict in place — and checks all the wave's steps against the
+integrated tree (one integrator/verifier, not one per step, so it also catches
+interactions between them, and it diffs against the kept worktrees to pinpoint
+merge-caused faults). Worktrees are used for **every** step in a
 git repo — even a single sequential step — so the workers' in-progress,
 transiently-broken edits never reach your tree and never flood your language server
 with false diagnostics. Outside git it falls back to sequential edits in the shared tree.
@@ -182,10 +181,15 @@ this is why you call it per wave rather than handing over the whole plan:**
   `tiered-development:architect` if the fix needs a design decision), and re-verify
   before moving on.
 - If `integration.conflict` is not `none` **or** `integration.failed` is set, stop
-  and inspect. A conflict means the wave's steps were not actually file-disjoint —
-  re-plan that boundary. `failed` means the integrator returned no result and could
-  not confirm the merge (a crashed integrator, distinct from a genuine file-overlap
-  conflict) — inspect the tree before continuing.
+  and inspect. The integrator/verifier resolves conflicts in place, so a surfaced
+  `conflict` is one it could **not** safely resolve — the wave's steps overlapped in
+  a genuinely ambiguous way; re-plan that boundary. `failed` means it returned no
+  result and could not confirm the merge (a crash, distinct from an ambiguous
+  conflict) — inspect the tree before continuing. On a `fail`/`needs-changes` wave
+  the worktrees are left in place on purpose, for you to inspect the original
+  branches while spinning the fix-up. (`integration.resolved` lists files where a
+  conflict *was* auto-resolved — the verifier scrutinises those, but they don't stop
+  the wave.)
 - If a step you routed to Sonnet turns out to need judgement, re-route it to a
   `tiered-development:builder` rather than accepting a guessed result.
 

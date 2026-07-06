@@ -1,12 +1,11 @@
 export const meta = {
   name: "execute-wave",
-  description: "Execute ONE wave of an approved plan: run each step in its own git worktree (Opus builder for substantive steps, Sonnet implementer for mechanical, Haiku for menial), merge the wave's branches back with a git integrator, then a single verifier checks every step against the integrated tree. Called once per wave by the tiered-development skill so the coordinator stays in the loop between waves. Worktrees are used for every step when in a git repo — not only for parallel multi-step waves — to keep the coordinator's tree and its LSP diagnostics clean.",
-  whenToUse: "Invoked by the tiered-development skill, once per wave. Pass args as an object: { task, wave, steps, isGit, totalSteps?, baseRef?, integratorModel? } — steps are this wave's steps (each with idx, title, change, complexity, files, verify). Leave a step's complexity blank to let a Sonnet composer pick its tier. Returns { wave, results, integration }.",
+  description: "Execute ONE wave of an approved plan: run each step in its own git worktree (Opus builder for substantive steps, Sonnet implementer for mechanical, Haiku for menial), then a single Sonnet integrator/verifier merges the wave's branches back — resolving any conflict in place — and checks every step against the integrated tree. Called once per wave by the tiered-development skill so the coordinator stays in the loop between waves. Worktrees are used for every step when in a git repo — not only for parallel multi-step waves — to keep the coordinator's tree and its LSP diagnostics clean.",
+  whenToUse: "Invoked by the tiered-development skill, once per wave. Pass args as an object: { task, wave, steps, isGit, totalSteps?, baseRef? } — steps are this wave's steps (each with idx, title, change, complexity, files, verify). Leave a step's complexity blank to let a Sonnet composer pick its tier. Returns { wave, results, integration }.",
   phases: [
     { title: "Compose", detail: "Only when a step's tier is unspecified: a Sonnet composer picks menial/mechanical/substantive per step", model: "sonnet" },
     { title: "Implement", detail: "Each step runs in its own worktree: Haiku (menial) / Sonnet (mechanical) implementer or Opus builder (substantive)", model: "opus" },
-    { title: "Integrate", detail: "Git integrator rebases the wave's worktree branches onto the working branch (linear history); Haiku by default, escalating to Sonnet on conflict or a failed (no-result) pass", model: "haiku" },
-    { title: "Verify", detail: "A single Sonnet verifier checks all the wave's steps against the integrated tree", model: "sonnet" },
+    { title: "Integrate & verify", detail: "A single Sonnet integrator/verifier merges the wave's worktree branches into the working branch (linear history), resolving any conflict in place, then verifies every step against the integrated tree — diffing against the kept worktrees to pinpoint merge-caused faults", model: "sonnet" },
   ],
 }
 
@@ -26,17 +25,6 @@ const IS_GIT = !!A.isGit
 const BASE_REF = typeof A.baseRef === "string" ? A.baseRef.trim() : ""
 if (!TASK) return { error: "No task given. Pass args as { task, wave, steps, isGit }." }
 if (RAW_STEPS.length === 0) return { error: "No steps given for this wave. Pass args as { task, wave, steps, isGit }." }
-
-// Git-branch integrator model: mechanical merge work, so Haiku by default; the
-// coordinator may pin it to Sonnet. Anything else is a mistake — scream, don't guess.
-// (Distinct from the design/review PLAN-integrator, which is ≥Opus.)
-let integratorModel = "haiku"
-if (A.integratorModel !== undefined && A.integratorModel !== null && A.integratorModel !== "") {
-  if (!["haiku", "sonnet"].includes(A.integratorModel)) {
-    return { error: "execute-wave: `integratorModel` must be 'haiku' or 'sonnet' (this is the git-branch integrator), got " + JSON.stringify(A.integratorModel) + "." }
-  }
-  integratorModel = A.integratorModel
-}
 
 // ─── Complexity → model tier ───
 // Three tiers. The coordinator hand-authors these steps, so accept the common
@@ -133,9 +121,12 @@ const TIER_PICK_SCHEMA = {
     rationale: { type: "string", description: "one line on the calls made" },
   },
 }
-const WAVE_VERDICT_SCHEMA = {
-  type: "object", required: ["results"],
+const WAVE_SCHEMA = {
+  type: "object", required: ["merged", "results"],
   properties: {
+    merged: { type: "integer", description: "how many worktree branches were merged into the working branch (0 if none / non-git)" },
+    resolved: { type: "string", description: "files where a merge conflict was encountered and RESOLVED in place, else 'none' — a risk point the verification scrutinises" },
+    conflict: { type: "string", description: "files with a conflict you could NOT resolve (merge abandoned, BLOCKER), else 'none'" },
     results: {
       type: "array",
       items: {
@@ -148,13 +139,6 @@ const WAVE_VERDICT_SCHEMA = {
         },
       },
     },
-  },
-}
-const INTEGRATE_SCHEMA = {
-  type: "object", required: ["merged"],
-  properties: {
-    merged: { type: "integer", description: "how many worktree branches were merged into the working branch" },
-    conflict: { type: "string", description: "conflicting files if any merge failed, else 'none'" },
   },
 }
 
@@ -220,65 +204,67 @@ const impls = await parallel(steps.map(s => () => agent(implPrompt(s), implOpts(
 const implReport = k => impls[k] || "(no report returned)"
 log("wave " + WAVE + ": " + steps.length + " step(s) implemented" + (useWorktrees ? " in isolated worktree(s)" : " in the shared tree (no git)"))
 
-// ─── Integrate (git only) ───
-const integratePrompt = reason =>
-  "## Integrate wave " + WAVE + " worktrees\n" +
-  (reason === "conflict"
-    ? "A cheaper first pass hit a CONFLICT and aborted, leaving the tree clean. Re-attempt carefully — a cheap model may have mis-merged. If the branches genuinely conflict, abort and report EXACTLY which files/hunks conflict.\n\n"
-    : reason === "nothing"
-    ? "A cheaper first pass returned NO result and may have left the working tree mid-merge, dirty, or with some branches already merged. BEFORE integrating anything, run `git status`; if a merge or rebase is in progress, complete it or abort it (`git merge --abort` / `git rebase --abort`) and reconcile any partial state; only then proceed with the remaining un-merged branches. If the tree state is unclear or cannot be made clean, STOP and report a BLOCKER rather than guessing.\n\n"
-    : "") +
-  "The implementation step(s) below ran each in its own git worktree under `.claude/worktrees/`, each committing its change on its own branch. They were designed to touch DISJOINT files, so rebasing them onto the working branch must be conflict-free.\n\n" +
-  "The step(s) in this wave and the files each was to touch:\n" +
-  steps.map(s => "- " + s.title + (s.files && s.files.length ? " → " + s.files.join(", ") : " → (unspecified)")).join("\n") + "\n\n" +
-  "Do exactly this, from the main working tree (not a worktree):\n" +
-  "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on.\n" +
-  "2. Integrate them ONE AT A TIME, keeping history LINEAR (do NOT create merge commits): for each worktree whose branch is ahead of the current working branch, first replay that branch onto the up-to-date working branch by running, from inside the worktree, `git -C <worktree-path> rebase <current-branch>`; then, from the main working tree, fast-forward with `git merge --ff-only <branch>`.\n" +
-  "3. If the rebase reports a conflict, run `git -C <worktree-path> rebase --abort` and STOP: report the conflicting files as a BLOCKER (a conflict means the steps were not actually file-disjoint). Do not try to resolve it.\n" +
-  "4. After each successful fast-forward, remove that worktree with `git worktree remove <path>` and delete its now-integrated branch.\n\n" +
-  "Report how many branches you integrated and any conflict.\n\n" + COMMS
-const runIntegrator = (model, reason) =>
-  agent(integratePrompt(reason), {
-    label: "integrate:w" + WAVE + (model !== integratorModel ? ":" + model : ""),
-    phase: "Integrate", model, agentType: NS + "implementer", schema: INTEGRATE_SCHEMA,
-  })
+// ─── Integrate & verify (one Sonnet agent: merge + resolve, then verify) ───
 const conflicted = r => r && r.conflict && r.conflict !== "none"
-// A conflict OR a null/empty result both warrant a more capable retry.
-const needsRetry = r => !r || conflicted(r)
+
+const stepBlocks = steps.map((s, k) =>
+  "### idx " + s.idx + " — " + s.title + "\n" +
+  "Intended change: " + s.change + (s.verify ? "\nDone when: " + s.verify : "") +
+  (s.files.length ? "\nFiles: " + s.files.join(", ") : "") +
+  "\nImplementer reported:\n" + implReport(k)
+).join("\n\n")
+
+const integratePart = useWorktrees
+  ? "## Part A — Integrate the wave's worktrees\n" +
+    "Each step below ran in its own git worktree under `.claude/worktrees/`, each committing its change on its own branch. They were designed to touch DISJOINT files, so rebasing them onto the working branch should be conflict-free. The step(s) and the files each was to touch:\n" +
+    steps.map(s => "- " + s.title + (s.files && s.files.length ? " → " + s.files.join(", ") : " → (unspecified)")).join("\n") + "\n\n" +
+    "Do this from the main working tree (not a worktree):\n" +
+    "0. Run `git status` first. If a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n" +
+    "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Note which branch corresponds to which step (match it by the files the step was to touch) — you need this mapping in Part B.\n" +
+    "2. Integrate them ONE AT A TIME, keeping history LINEAR (do NOT create merge commits): for each worktree whose branch is ahead of the working branch, replay it with `git -C <worktree-path> rebase <current-branch>`, then from the main working tree fast-forward with `git merge --ff-only <branch>`.\n" +
+    "3. If a rebase reports a CONFLICT, RESOLVE it in place rather than returning to the coordinator: reconcile the two sides so BOTH steps' stated intent is honoured (a conflict between supposedly file-disjoint steps means their edits overlapped — combine them, never silently drop one side), then complete the rebase. Add every such file to `resolved`. ONLY if the correct reconciliation is genuinely ambiguous — you would have to guess intent — run `git -C <worktree-path> rebase --abort`, set `conflict` to those files, STOP the merge, and report a BLOCKER; do not guess.\n" +
+    "4. Do NOT remove the worktrees yet — Part B needs them to check the merge.\n" +
+    "Set `merged` to how many branches you integrated, `resolved` to the files you resolved a conflict in (or 'none'), and `conflict` to any files you could not resolve (or 'none').\n\n" +
+    "## Part B — Verify against the integrated tree\n" +
+    "(Skip Part B and return `results: []` only if you aborted the merge on an unresolvable conflict in Part A.)\n"
+  : "## Verify\n" +
+    "Set `merged` to 0 and `resolved`/`conflict` to 'none' — the step(s) below were edited directly in the current working tree, so there is nothing to merge.\n"
+
+phase("Integrate & verify")
+const wave = await agent(
+  "## Integrate and verify wave " + WAVE + "\n" +
+  "This is part of a larger task: " + TASK + "\n\n" +
+  integratePart +
+  "\nAll the step(s) below are now in the current working tree. Check EACH against its STATED intent, sceptically — and look for interactions BETWEEN them that a per-file review would miss (an assumption that holds in one step but not once another lands). Prefer evidence: run the relevant build/test/lint once if cheap and quote the shortest decisive line.\n" +
+  (useWorktrees
+    ? "Use the KEPT worktrees to pinpoint faults the merge itself introduced: for each step, diff the integrated tree against that step's original branch (`git diff <step-branch> -- <that step's files>`); a change dropped or mangled by the rebase/resolution shows up here, located precisely. Scrutinise any file you listed in `resolved` hardest.\n" +
+    "AFTER verifying: if EVERY step passed and you found no merge-introduced fault, remove each worktree (`git worktree remove <path>`) and delete its now-integrated branch. If ANY step is `needs-changes`/`fail` or you found a merge fault, LEAVE the worktrees in place and name the ones you left, so the coordinator can inspect them.\n"
+    : "") +
+  "Return a verdict PER STEP, keyed by the given idx.\n\n" +
+  stepBlocks + "\n\n" + COMMS,
+  { label: "verify:w" + WAVE, phase: "Integrate & verify", model: "sonnet", agentType: NS + "verifier", schema: WAVE_SCHEMA }
+)
+
+const verdByIdx = {}
+if (wave && Array.isArray(wave.results)) wave.results.forEach(r => { verdByIdx[r.idx] = r })
 
 let integration = null
 if (useWorktrees) {
-  phase("Integrate")
-  integration = await runIntegrator(integratorModel, null)
-  // Scale up on trouble: a cheap merge that hit a conflict or returned nothing gets a more capable retry.
-  if (needsRetry(integration) && integratorModel === "haiku") {
-    log("wave " + WAVE + " integrate " + (integration ? "hit a conflict" : "returned nothing") + " on haiku — escalating to sonnet")
-    const esc = await runIntegrator("sonnet", conflicted(integration) ? "conflict" : "nothing")
-    if (esc) integration = esc
+  if (wave && Number.isInteger(wave.merged)) {
+    integration = {
+      merged: wave.merged,
+      conflict: (wave.conflict && wave.conflict !== "") ? wave.conflict : "none",
+      resolved: (wave.resolved && wave.resolved !== "") ? wave.resolved : "none",
+    }
   }
   // Never leave integration null: the wave could not be confirmed merged. A non-'none'
   // conflict here trips the coordinator's stop-on-conflict path via `conflicted`.
-  // merged:0 is a floor, not a fact: a crashed integrator may have merged some branches before dying, so this understates the true count. `failed:true` — not the conflict string — is the authoritative crash signal; downstream should key on `failed`, not a conflict-string match.
-  if (!integration) integration = { merged: 0, conflict: "integrator returned no result — the wave could not be confirmed merged", failed: true }
-  log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" + (conflicted(integration) ? ", CONFLICT: " + integration.conflict : ""))
+  // merged:0 is a floor, not a fact: a crashed verifier may have merged some branches before dying, so this understates the true count. `failed:true` — not the conflict string — is the authoritative crash signal; downstream should key on `failed`, not a conflict-string match.
+  if (!integration) integration = { merged: 0, conflict: "verifier returned no result — the wave could not be confirmed merged", failed: true }
+  log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" +
+      (integration.resolved && integration.resolved !== "none" ? ", RESOLVED conflicts in: " + integration.resolved : "") +
+      (conflicted(integration) ? ", UNRESOLVED CONFLICT: " + integration.conflict : ""))
 }
-
-// ─── Verify (one verifier over the whole integrated tree) ───
-phase("Verify")
-const waveVerdict = await agent(
-  "## Verify wave " + WAVE + " against the integrated tree\n" +
-  "This is part of a larger task: " + TASK + "\n\n" +
-  "All the step(s) below have been merged into the current working tree. Check EACH against its STATED intent, sceptically — and look for interactions BETWEEN them that a per-file review would miss (an assumption that holds in one step but not once another lands). Prefer evidence: run the relevant build/test/lint once if cheap and quote the shortest decisive line. Return a verdict PER STEP, keyed by the given idx.\n\n" +
-  steps.map((s, k) =>
-    "### idx " + s.idx + " — " + s.title + "\n" +
-    "Intended change: " + s.change + (s.verify ? "\nDone when: " + s.verify : "") +
-    (s.files.length ? "\nFiles: " + s.files.join(", ") : "") +
-    "\nImplementer reported:\n" + implReport(k)
-  ).join("\n\n") + "\n\n" + COMMS,
-  { label: "verify:w" + WAVE, phase: "Verify", model: "sonnet", agentType: NS + "verifier", schema: WAVE_VERDICT_SCHEMA }
-)
-const verdByIdx = {}
-if (waveVerdict && Array.isArray(waveVerdict.results)) waveVerdict.results.forEach(r => { verdByIdx[r.idx] = r })
 
 const conflict = useWorktrees && conflicted(integration) ? integration.conflict : undefined
 const results = steps.map((s, k) => {
