@@ -1,11 +1,11 @@
 export const meta = {
   name: "execute-wave",
-  description: "Execute ONE wave of an approved plan: run each step in its own git worktree (Opus builder for substantive steps, Sonnet implementer for mechanical, Haiku for menial), then a single Sonnet integrator/verifier merges the wave's branches back — resolving any conflict in place — and checks every step against the integrated tree. Called once per wave by the tiered-development skill so the coordinator stays in the loop between waves. Worktrees are used for every step when in a git repo — not only for parallel multi-step waves — to keep the coordinator's tree and its LSP diagnostics clean.",
-  whenToUse: "Invoked by the tiered-development skill, once per wave. Pass args as an object: { task, wave, steps, isGit, totalSteps?, baseRef? } — steps are this wave's steps (each with idx, title, change, complexity, files, verify). Leave a step's complexity blank to let a Sonnet composer pick its tier. Returns { wave, results, integration }.",
+  description: "Execute ONE wave of an approved plan: a mandatory Sonnet composer groups the wave's steps into worker assignments (bundling cheap related steps, keeping substantive steps solo) and tiers each; each assignment runs in its own git worktree (Opus builder for substantive, Sonnet/Haiku implementer for mechanical/menial); then a single Sonnet integrator/verifier merges the wave's branches back — resolving any conflict in place — verifies every step against the integrated tree, and on a GREEN wave squashes it into one commit. Called once per wave by the tiered-development skill so the coordinator stays in the loop between waves. Worktrees are used whenever in a git repo to keep the coordinator's tree and its LSP diagnostics clean.",
+  whenToUse: "Invoked by the tiered-development skill, once per wave. Pass args as an object: { task, wave, steps, isGit, totalSteps?, baseRef? } — steps are this wave's steps (each with idx, title, change, complexity, files, verify). Leave a step's complexity blank to let the composer pick its tier; the composer also groups cheap steps into shared workers. Returns { wave, results, integration }.",
   phases: [
-    { title: "Compose", detail: "Only when a step's tier is unspecified: a Sonnet composer picks menial/mechanical/substantive per step", model: "sonnet" },
-    { title: "Implement", detail: "Each step runs in its own worktree: Haiku (menial) / Sonnet (mechanical) implementer or Opus builder (substantive)", model: "opus" },
-    { title: "Integrate & verify", detail: "A single Sonnet integrator/verifier merges the wave's worktree branches into the working branch (linear history), resolving any conflict in place, then verifies every step against the integrated tree — diffing against the kept worktrees to pinpoint merge-caused faults", model: "sonnet" },
+    { title: "Compose", detail: "Mandatory: a Sonnet composer groups the wave's steps into worker assignments (bundling cheap related steps, keeping substantive steps solo) and tiers each group", model: "sonnet" },
+    { title: "Implement", detail: "Each worker assignment (a group of steps) runs in its own worktree: Haiku (menial) / Sonnet (mechanical) implementer or Opus builder (substantive)", model: "opus" },
+    { title: "Integrate & verify", detail: "A single Sonnet integrator/verifier merges the wave's worktree branches into the working branch, resolving any conflict in place, verifies every step against the integrated tree (diffing against the kept worktrees to pinpoint merge faults), and on a GREEN wave squashes it into one summary commit", model: "sonnet" },
   ],
 }
 
@@ -105,20 +105,23 @@ const COMMS = `Comms: your final message is DATA returned to the coordinator, no
 const SELECTION_PRINCIPLE = `Pick the cheapest tier that will reliably get the step right, weighing the judgement it needs against the cost of getting it wrong (subtle, hard-to-catch, or wide blast radius). menial = a cheap edit that is obvious if wrong (rename, typo, boilerplate). mechanical = routine work with settled instructions. substantive = needs implementation judgement, or a silent error would be expensive. Err upward when a mistake would be costly.`
 
 // ─── Schemas ───
-const TIER_PICK_SCHEMA = {
-  type: "object", required: ["tiers"],
+const GROUPS_SCHEMA = {
+  type: "object", required: ["groups"],
   properties: {
-    tiers: {
+    groups: {
       type: "array",
       items: {
-        type: "object", required: ["idx", "complexity"],
+        type: "object", required: ["steps", "complexity"],
         properties: {
-          idx: { type: "integer", description: "the step's idx, exactly as given" },
+          steps: {
+            type: "array", items: { type: "integer" },
+            description: "idx values of every step in this group, exactly as given; each group = ONE worker/worktree",
+          },
           complexity: { enum: ["menial", "mechanical", "substantive"] },
         },
       },
     },
-    rationale: { type: "string", description: "one line on the calls made" },
+    rationale: { type: "string", description: "one line on the grouping + tier calls" },
   },
 }
 const WAVE_SCHEMA = {
@@ -127,6 +130,8 @@ const WAVE_SCHEMA = {
     merged: { type: "integer", description: "how many worktree branches were merged into the working branch (0 if none / non-git)" },
     resolved: { type: "string", description: "files where a merge conflict was encountered and RESOLVED in place, else 'none' — a risk point the verification scrutinises" },
     conflict: { type: "string", description: "files with a conflict you could NOT resolve (merge abandoned, BLOCKER), else 'none'" },
+    squashed: { type: "boolean", description: "true ONLY if the wave passed GREEN and was collapsed into ONE commit; false/absent otherwise" },
+    summary: { type: "string", description: "on a GREEN wave, the one-line message used for the single squashed wave commit; else 'none'" },
     results: {
       type: "array",
       items: {
@@ -142,26 +147,92 @@ const WAVE_SCHEMA = {
   },
 }
 
-// ─── Compose: pick tiers for steps left unspecified ───
-const autoSteps = steps.filter(s => s._cx.status === "auto")
-if (autoSteps.length > 0) {
+// ─── Grouping helpers ───
+// The unit of implementation is a GROUP: one worker, one worktree, doing every step in it.
+// Verification stays per-step (per idx); grouping only changes how work is dispatched.
+const TIER_ORDER = { menial: 0, mechanical: 1, substantive: 2 }
+const maxTier = (...ts) => { const v = ts.filter(Boolean); return v.length ? v.sort((a, b) => TIER_ORDER[b] - TIER_ORDER[a])[0] : null }
+const floorOf = s => (s._cx.status === "ok" ? s._cx.tier : null) // an explicit complexity is a FLOOR, else null (composer decides)
+const makeGroup = (members, complexity) => {
+  const cx = complexity || "mechanical" // safe middle, matches the old per-step fallback
+  const idxs = members.map(m => m.idx)
+  const files = [...new Set(members.flatMap(m => m.files))]
+  const label = (cx === "substantive" ? "build:" : "impl:") + idxs.map(i => i + 1).join("+")
+  const title = members.length === 1 ? members[0].title
+    : members.length + " steps: " + members.map(m => m.title).join("; ")
+  members.forEach(m => { m.complexity = cx }) // a step's tier is its worker's tier (keeps per-step tierOf/results correct)
+  return { members, idxs, complexity: cx, files, label, title }
+}
+
+// The composer PROPOSES a grouping; buildGroups is AUTHORITATIVE. It guarantees three post-conditions:
+// (1) every idx covered exactly once; (2) no `substantive` group has >1 member; (3) no group tiered below a member's floor.
+const buildGroups = picked => {
+  const byValue = new Map(steps.map(s => [s.idx, s]))
+  const seen = new Set()
+  const cleaned = [] // [{ members:[step], pick }]
+  const raw = picked && Array.isArray(picked.groups) ? picked.groups : []
+  for (const g of raw) {
+    const pick = ["menial", "mechanical", "substantive"].includes(g && g.complexity) ? g.complexity : null
+    const members = []
+    for (const idx of (Array.isArray(g && g.steps) ? g.steps : [])) {
+      if (!byValue.has(idx)) { log("compose w" + WAVE + ": group referenced unknown idx " + idx + " — ignored"); continue }
+      if (seen.has(idx)) { log("compose w" + WAVE + ": idx " + idx + " duplicated across groups — kept first, dropped dup"); continue }
+      seen.add(idx); members.push(byValue.get(idx))
+    }
+    if (members.length) cleaned.push({ members, pick })
+  }
+  // Uncovered steps → each its own group at its own floor (the composer dropped them; don't guess a bundle).
+  for (const s of steps) if (!seen.has(s.idx)) {
+    log("compose w" + WAVE + ": step idx " + s.idx + " uncovered by composer — own group at its floor")
+    cleaned.push({ members: [s], pick: floorOf(s) })
+  }
+  // Substantive-solo + floor enforcement (authoritative — never trust the composer to protect a heavy step).
+  const out = []
+  for (const { members, pick } of cleaned) {
+    if (pick === "substantive") { // composer flagged the whole bundle heavy → explode, each solo
+      if (members.length > 1) log("compose w" + WAVE + ": composer tiered a " + members.length + "-step group substantive — split to solo workers")
+      members.forEach(m => out.push(makeGroup([m], "substantive")))
+      continue
+    }
+    const floored = members.filter(m => floorOf(m) === "substantive") // an explicit substantive floor must run solo
+    const rest = members.filter(m => floorOf(m) !== "substantive")
+    if (floored.length && members.length > 1) log("compose w" + WAVE + ": pulled " + floored.length + " substantive-floor step(s) out of a bundle to run solo")
+    floored.forEach(m => out.push(makeGroup([m], "substantive")))
+    if (rest.length) out.push(makeGroup(rest, maxTier(pick, ...rest.map(floorOf))))
+  }
+  return out
+}
+
+// ─── Compose: MANDATORY — group the wave's steps into worker assignments AND tier each group.
+// Nothing to decide only when there's a single step whose tier is already set: it is its own group.
+const needCompose = steps.length > 1 || steps.some(s => s._cx.status === "auto")
+let groups
+if (!needCompose) {
+  groups = steps.map(s => makeGroup([s], floorOf(s)))
+} else {
   phase("Compose")
   const picked = await agent(
-    "## Choose the build tier for " + autoSteps.length + " step(s) of wave " + WAVE + "\n" +
+    "## Group and tier the " + steps.length + " step(s) of wave " + WAVE + "\n" +
     "Part of a larger task: " + TASK + "\n\n" +
-    "For EACH step below, choose its tier — `menial`, `mechanical`, or `substantive`. " +
+    "Decide how to assign these steps to WORKERS. Each worker you define gets ONE git worktree and does every step you put in it. You are only PLANNING the assignment; you do not implement anything.\n\n" +
+    "Rules (obey exactly):\n" +
+    "- COVER every step's idx EXACTLY ONCE across all groups. Consolidate only — never split a single step across groups.\n" +
+    "- Bundle into a shared worker ONLY cheap, related menial/mechanical steps (small, mechanical, obvious-if-wrong edits that sit well together). Grouping saves a worktree per trivial step.\n" +
+    "- Keep every SUBSTANTIVE step in its OWN worker (solo) — a clean, focused context is why substantive work goes to its tier; never bundle it.\n" +
+    "- A step's current tier is a FLOOR: never tier a group BELOW any member's stated tier. You may raise a blank/cheap step to a group's tier when you bundle it.\n" +
     SELECTION_PRINCIPLE + "\n\n" +
-    "You are only CHOOSING the tier; you do not implement anything. Return a tier per step, keyed by the given idx.\n\n" +
-    autoSteps.map(s => "### idx " + s.idx + " — " + s.title + "\n" + s.change + (s.files.length ? "\nFiles: " + s.files.join(", ") : "") + (s.verify ? "\nDone when: " + s.verify : "")).join("\n\n") +
-    "\n\n" + COMMS,
-    { label: "compose:w" + WAVE, phase: "Compose", model: "sonnet", schema: TIER_PICK_SCHEMA }
+    "Return `groups`, each { steps:[idx,...], complexity } covering every idx below exactly once.\n\n" +
+    steps.map(s => "### idx " + s.idx + " — " + s.title + " [tier: " + (floorOf(s) || "auto") + "]\n" +
+      s.change + (s.files.length ? "\nFiles: " + s.files.join(", ") : "") + (s.verify ? "\nDone when: " + s.verify : "")
+    ).join("\n\n") + "\n\n" + COMMS,
+    { label: "compose:w" + WAVE, phase: "Compose", model: "sonnet", schema: GROUPS_SCHEMA }
   )
-  const byIdx = {}
-  if (picked && Array.isArray(picked.tiers)) picked.tiers.forEach(t => { byIdx[t.idx] = t.complexity })
-  // Fall back to mechanical (Sonnet) for any the composer skipped — the safe middle.
-  autoSteps.forEach(s => { s.complexity = byIdx[s.idx] || "mechanical" })
-  log("wave " + WAVE + " composer picked tiers: " + autoSteps.map(s => (s.idx + 1) + "→" + s.complexity).join(", ") + (picked && picked.rationale ? " — " + picked.rationale : ""))
+  groups = buildGroups(picked)
+  log("wave " + WAVE + " composer grouped " + steps.length + " step(s) into " + groups.length + " worker(s): " +
+      groups.map(g => g.label).join(", ") + (picked && picked.rationale ? " — " + picked.rationale : ""))
 }
+const groupByIdx = {}
+groups.forEach(g => g.idxs.forEach(idx => { groupByIdx[idx] = g }))
 
 // ─── Tier routing ───
 const TIER = {
@@ -169,60 +240,74 @@ const TIER = {
   mechanical: { model: "sonnet", agentType: NS + "implementer", name: "sonnet" },
   substantive: { model: "opus", agentType: NS + "builder", name: "opus" },
 }
-const tierOf = s => TIER[s.complexity] || TIER.mechanical
+const tierOf = g => TIER[g.complexity] || TIER.mechanical // takes a group (or a step — makeGroup sets each member's complexity)
 
 // ─── Prompts ───
-const implOpts = s => {
-  const t = tierOf(s)
-  const base = {
-    label: (s.complexity === "substantive" ? "build:" : "impl:") + (s.idx + 1),
-    phase: "Implement", model: t.model, agentType: t.agentType,
-  }
+const implOpts = g => {
+  const t = tierOf(g)
+  const base = { label: g.label, phase: "Implement", model: t.model, agentType: t.agentType }
   return useWorktrees ? { ...base, isolation: "worktree" } : base
 }
-const implPrompt = s => {
-  const filesLine = s.files && s.files.length ? "Files: " + s.files.join(", ") + "\n" : ""
-  const judgement = s.complexity === "substantive"
+const implPrompt = g => {
+  const judgement = g.complexity === "substantive"
     ? "It needs implementation judgement — decide the 'how' — but do NOT re-open the design or expand scope. If realising it properly would require changing the approach, STOP and report a BLOCKER."
-    : "Make exactly this change — no more, and no design judgement. If it is ambiguous or impossible as written, STOP and report a BLOCKER rather than guessing."
+    : "Make exactly these change(s) — no more, and no design judgement. If any is ambiguous or impossible as written, STOP and report a BLOCKER rather than guessing."
   const resetNote = useWorktrees && BASE_REF
-    ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + BASE_REF + "` so your work builds on the intended commit (its objects are already present in the shared repo). If that command fails, or the files/API this step depends on are still missing afterward, STOP and report a BLOCKER rather than guessing."
+    ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + BASE_REF + "` so your work builds on the intended commit (its objects are already present in the shared repo). If that command fails, or the files/API this work depends on are still missing afterward, STOP and report a BLOCKER rather than guessing."
     : ""
   const wtNote = useWorktrees
-    ? resetNote + "\n\nYou are working in an ISOLATED git worktree that may run in parallel with sibling steps. Your worktree may NOT contain in-progress changes from those siblings; if this step turns out to need code another step was to add and you cannot find it, STOP and report a BLOCKER rather than guessing. When the change is complete, COMMIT it in this worktree with a concise message describing the step (no attribution trailer)."
+    ? resetNote + "\n\nYou are working in an ISOLATED git worktree that may run in parallel with sibling workers. Your worktree may NOT contain in-progress changes from those siblings; if this work turns out to need code another worker was to add and you cannot find it, STOP and report a BLOCKER rather than guessing. When ALL the change(s) below are complete, COMMIT them in this worktree in a SINGLE commit with a concise message describing the work (no attribution trailer)."
     : ""
-  return "## Implementation step " + (s.idx + 1) + "/" + TOTAL + " (wave " + WAVE + "): " + s.title + "\n" +
-    "This is part of a larger task: " + TASK + "\n\n" + filesLine + "Change to make:\n" + s.change + "\n\n" +
-    (s.verify ? "This step is done when: " + s.verify + "\n\n" : "") +
-    judgement + " Match surrounding code and conventions." + wtNote + "\n\n" + COMMS
+  const multi = g.members.length > 1
+  const body = multi
+    ? "## Implementation (wave " + WAVE + "): " + g.members.length + " related steps in one worktree\n" +
+      "This is part of a larger task: " + TASK + "\n\n" +
+      "Do ALL of the following steps in this one worktree, in order; keep each edit scoped to exactly what that step asks:\n\n" +
+      g.members.map(m => "**Step " + (m.idx + 1) + "/" + TOTAL + " — " + m.title + "**\n" +
+        (m.files.length ? "Files: " + m.files.join(", ") + "\n" : "") + m.change +
+        (m.verify ? "\nDone when: " + m.verify : "")).join("\n\n") + "\n\n"
+    : (() => {
+        const s = g.members[0]
+        return "## Implementation step " + (s.idx + 1) + "/" + TOTAL + " (wave " + WAVE + "): " + s.title + "\n" +
+          "This is part of a larger task: " + TASK + "\n\n" +
+          (s.files.length ? "Files: " + s.files.join(", ") + "\n" : "") + "Change to make:\n" + s.change + "\n\n" +
+          (s.verify ? "This step is done when: " + s.verify + "\n\n" : "")
+      })()
+  return body + judgement + " Match surrounding code and conventions." + wtNote + "\n\n" + COMMS
 }
 
 // ─── Implement ───
 phase("Implement")
-const impls = await parallel(steps.map(s => () => agent(implPrompt(s), implOpts(s))))
-// A crashed/empty implementer should read identically in the verify prompt and the results.
-const implReport = k => impls[k] || "(no report returned)"
-log("wave " + WAVE + ": " + steps.length + " step(s) implemented" + (useWorktrees ? " in isolated worktree(s)" : " in the shared tree (no git)"))
+const impls = await parallel(groups.map(g => () => agent(implPrompt(g), implOpts(g))))
+// Verification is per-step but implementation was per-group: map each step idx to its group's report.
+// A crashed/empty worker reads identically in the verify prompt and the results.
+const reportByIdx = {}
+groups.forEach((g, k) => { const r = impls[k] || "(no report returned)"; g.idxs.forEach(idx => { reportByIdx[idx] = r }) })
+const implReport = idx => reportByIdx[idx] || "(no report returned)"
+log("wave " + WAVE + ": " + steps.length + " step(s) in " + groups.length + " worker(s)" + (useWorktrees ? " (isolated worktree each)" : " (shared tree, no git)"))
 
 // ─── Integrate & verify (one Sonnet agent: merge + resolve, then verify) ───
 const conflicted = r => r && r.conflict && r.conflict !== "none"
 
-const stepBlocks = steps.map((s, k) =>
-  "### idx " + s.idx + " — " + s.title + "\n" +
-  "Intended change: " + s.change + (s.verify ? "\nDone when: " + s.verify : "") +
-  (s.files.length ? "\nFiles: " + s.files.join(", ") : "") +
-  "\nImplementer reported:\n" + implReport(k)
-).join("\n\n")
+const stepBlocks = steps.map(s => {
+  const g = groupByIdx[s.idx]
+  const mates = g.idxs.filter(i => i !== s.idx)
+  const mate = mates.length ? "\n(Built in one worker alongside step(s): " + mates.map(i => i + 1).join(", ") + ")" : ""
+  return "### idx " + s.idx + " — " + s.title + "\n" +
+    "Intended change: " + s.change + (s.verify ? "\nDone when: " + s.verify : "") +
+    (s.files.length ? "\nFiles: " + s.files.join(", ") : "") + mate +
+    "\nImplementer reported:\n" + implReport(s.idx)
+}).join("\n\n")
 
 const integratePart = useWorktrees
   ? "## Part A — Integrate the wave's worktrees\n" +
-    "Each step below ran in its own git worktree under `.claude/worktrees/`, each committing its change on its own branch. They were designed to touch DISJOINT files, so rebasing them onto the working branch should be conflict-free. The step(s) and the files each was to touch:\n" +
-    steps.map(s => "- " + s.title + (s.files && s.files.length ? " → " + s.files.join(", ") : " → (unspecified)")).join("\n") + "\n\n" +
+    "Each WORKER below ran in its own git worktree under `.claude/worktrees/`, committing its change on its own branch (a worker may cover several bundled steps in one commit). The workers were assigned DISJOINT files, so rebasing them onto the working branch should be conflict-free. The worker(s) and the files each touched:\n" +
+    groups.map(g => "- " + g.label + " [" + g.members.map(m => m.title).join("; ") + "]" + (g.files.length ? " → " + g.files.join(", ") : " → (unspecified)")).join("\n") + "\n\n" +
     "Do this from the main working tree (not a worktree):\n" +
-    "0. Run `git status` first. If a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n" +
-    "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Note which branch corresponds to which step (match it by the files the step was to touch) — you need this mapping in Part B.\n" +
-    "2. Integrate them ONE AT A TIME, keeping history LINEAR (do NOT create merge commits): for each worktree whose branch is ahead of the working branch, replay it with `git -C <worktree-path> rebase <current-branch>`, then from the main working tree fast-forward with `git merge --ff-only <branch>`.\n" +
-    "3. If a rebase reports a CONFLICT, RESOLVE it in place rather than returning to the coordinator: reconcile the two sides so BOTH steps' stated intent is honoured (a conflict between supposedly file-disjoint steps means their edits overlapped — combine them, never silently drop one side), then complete the rebase. Add every such file to `resolved`. ONLY if the correct reconciliation is genuinely ambiguous — you would have to guess intent — run `git -C <worktree-path> rebase --abort`, set `conflict` to those files, STOP the merge, and report a BLOCKER; do not guess.\n" +
+    "0. BEFORE anything else, capture the pre-merge HEAD as the squash base: run `git rev-parse HEAD` and RECORD the literal sha it prints (call it START). Do not rely on a shell variable persisting between commands — note the actual sha; you reset onto it verbatim if the wave passes. START, not any passed-in base ref, is the squash base. Then run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n" +
+    "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Match each branch to a worker by the union of files it touched — you need this mapping in Part B.\n" +
+    "2. Integrate them ONE AT A TIME (do NOT create merge commits): for each worktree whose branch is ahead of the working branch, replay it with `git -C <worktree-path> rebase <current-branch>`, then from the main working tree fast-forward with `git merge --ff-only <branch>`.\n" +
+    "3. If a rebase reports a CONFLICT, RESOLVE it in place rather than returning to the coordinator: reconcile the two sides so BOTH workers' stated intent is honoured (a conflict between supposedly file-disjoint workers means their edits overlapped — combine them, never silently drop one side), then complete the rebase. Add every such file to `resolved`. ONLY if the correct reconciliation is genuinely ambiguous — you would have to guess intent — run `git -C <worktree-path> rebase --abort`, set `conflict` to those files, STOP the merge, and report a BLOCKER; do not guess.\n" +
     "4. Do NOT remove the worktrees yet — Part B needs them to check the merge.\n" +
     "Set `merged` to how many branches you integrated, `resolved` to the files you resolved a conflict in (or 'none'), and `conflict` to any files you could not resolve (or 'none').\n\n" +
     "## Part B — Verify against the integrated tree\n" +
@@ -237,8 +322,11 @@ const wave = await agent(
   integratePart +
   "\nAll the step(s) below are now in the current working tree. Check EACH against its STATED intent, sceptically — and look for interactions BETWEEN them that a per-file review would miss (an assumption that holds in one step but not once another lands). Prefer evidence: run the relevant build/test/lint once if cheap and quote the shortest decisive line.\n" +
   (useWorktrees
-    ? "Use the KEPT worktrees to pinpoint faults the merge itself introduced: for each step, diff the integrated tree against that step's original branch (`git diff <step-branch> -- <that step's files>`); a change dropped or mangled by the rebase/resolution shows up here, located precisely. Scrutinise any file you listed in `resolved` hardest.\n" +
-    "AFTER verifying: if EVERY step passed and you found no merge-introduced fault, remove each worktree (`git worktree remove <path>`) and delete its now-integrated branch. If ANY step is `needs-changes`/`fail` or you found a merge fault, LEAVE the worktrees in place and name the ones you left, so the coordinator can inspect them.\n"
+    ? "Use the KEPT worktrees to pinpoint faults the merge itself introduced: for each step, diff the integrated tree against its worker branch (`git diff <worker-branch> -- <that step's files>`); a change dropped or mangled by the rebase/resolution shows up here, located precisely. Scrutinise any file you listed in `resolved` hardest.\n" +
+    "AFTER verifying:\n" +
+    "- GREEN (EVERY step passed AND no merge-introduced fault): FIRST collapse the whole wave into ONE commit — `git reset --soft <START>` (the sha you recorded in Part A step 0), then a single `git commit -m \"<concise one-line summary of the wave's work>\"` (no attribution trailer; compose the summary from the steps' titles/intent). THEN remove each worktree (`git worktree remove <path>`) and FORCE-delete its branch with `git branch -D <branch>` — the squash rewrote history so the branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tip and no work is lost. Set `squashed` true and `summary` to that message. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
+    "  Edge case: if NO worker branch had a commit to merge (`merged` is 0, so the soft reset stages nothing and `git commit` would fail with \"nothing to commit\"), do NOT attempt the squash commit — set `squashed` false and `summary` 'none', and still remove any worktrees.\n" +
+    "- NOT GREEN (any step `needs-changes`/`fail`, or a merge fault): do NOT squash — LEAVE the per-step commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
     : "") +
   "Return a verdict PER STEP, keyed by the given idx.\n\n" +
   stepBlocks + "\n\n" + COMMS,
@@ -255,6 +343,8 @@ if (useWorktrees) {
       merged: wave.merged,
       conflict: (wave.conflict && wave.conflict !== "") ? wave.conflict : "none",
       resolved: (wave.resolved && wave.resolved !== "") ? wave.resolved : "none",
+      squashed: !!wave.squashed,
+      summary: (wave.summary && wave.summary !== "none") ? wave.summary : undefined,
     }
   }
   // Never leave integration null: the wave could not be confirmed merged. A non-'none'
@@ -263,16 +353,18 @@ if (useWorktrees) {
   if (!integration) integration = { merged: 0, conflict: "verifier returned no result — the wave could not be confirmed merged", failed: true }
   log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" +
       (integration.resolved && integration.resolved !== "none" ? ", RESOLVED conflicts in: " + integration.resolved : "") +
+      (integration.squashed ? ", squashed to 1 commit" + (integration.summary ? ": \"" + integration.summary + "\"" : "") : "") +
       (conflicted(integration) ? ", UNRESOLVED CONFLICT: " + integration.conflict : ""))
 }
 
 const conflict = useWorktrees && conflicted(integration) ? integration.conflict : undefined
-const results = steps.map((s, k) => {
+const results = steps.map(s => {
   const v = verdByIdx[s.idx]
-  log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierOf(s).name + "] (" + s.title + "): " + (v ? v.verdict : "unknown"))
+  const g = groupByIdx[s.idx]
+  log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierOf(g).name + "] (" + s.title + "): " + (v ? v.verdict : "unknown"))
   return {
-    step: s.title, wave: WAVE, tier: tierOf(s).name, worktree: useWorktrees,
-    implemented: implReport(k), verdict: v ? v.verdict : "unknown", evidence: v ? (v.evidence || "") : "", problems: v ? (v.problems || "") : "",
+    step: s.title, wave: WAVE, tier: tierOf(g).name, worktree: useWorktrees,
+    implemented: implReport(s.idx), verdict: v ? v.verdict : "unknown", evidence: v ? (v.evidence || "") : "", problems: v ? (v.problems || "") : "",
     integrationConflict: conflict,
   }
 })

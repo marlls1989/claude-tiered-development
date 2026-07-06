@@ -22,8 +22,8 @@ cost of getting it wrong.
         ┌───────────────────────── Sonnet ─────────────────────────────┐
         │  implementer     mechanical edits                            │
         │  reader          read-only research → digest                 │
-        │  verifier        merge + resolve, then verify per wave       │
-        │  composer        picks tiers when you don't                  │
+        │  verifier        merge/resolve, verify, squash on green      │
+        │  composer        groups + tiers steps                        │
         └──────────────────────────────────────────────────────────────┘
                               ▲  results            menial ▼
         ┌───────────────────────── Haiku ──────────────────────────────┐
@@ -48,7 +48,7 @@ fresh Opus/Sonnet/Haiku workers each build one well-scoped slice in its own work
 | `builder` | Opus | Primary implementer of substantive, judgement-requiring code. May decide the *how*, never re-opens the design. |
 | `implementer` | Sonnet / Haiku | Mechanical (Sonnet) or menial (Haiku) execution of a single precise step. No design judgement. |
 | `reader` | Sonnet / Haiku | Read-only research; returns a cited digest, not raw file dumps. |
-| `verifier` | Sonnet | Merges the wave's worktree branches back (resolving conflicts in place), then one adversarial check per wave against the integrated tree and the plan's stated intent — diffing against the kept worktrees to pinpoint merge-caused faults. |
+| `verifier` | Sonnet | Merges the wave's worker branches back (resolving conflicts in place), one adversarial check per wave against the integrated tree and the plan's stated intent (diffing against the kept worktrees to pinpoint merge-caused faults), and on a green wave squashes the wave into one summary commit. |
 
 ### Skill (`skills/tiered-development/`)
 
@@ -88,14 +88,17 @@ Fable sparingly.
   panel's top tier** (Fable if any panelist is Fable). Called as
   `Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })`;
   returns `{ design, plan, waves }`.
-- **`execute-wave`** — runs one wave: each step in **its own git worktree**, routed
-  by its three-tier `complexity` (substantive → Opus `builder`, mechanical → Sonnet,
-  menial → Haiku `implementer`); then a **single** Sonnet `verifier` merges the
-  wave's branches back — resolving any conflict in place — and checks all the wave's
-  steps against the integrated tree. Worktrees are used for
-  **every** step in a git repo — even a single sequential one — so the workers'
-  in-progress edits never flood the coordinator's language server with false
-  diagnostics; outside git it falls back to sequential edits in the shared tree.
+- **`execute-wave`** — runs one wave: a **mandatory** Sonnet composer groups the
+  wave's steps into worker assignments (bundling cheap related steps, keeping
+  substantive steps solo) and tiers each (substantive → Opus `builder`, mechanical →
+  Sonnet, menial → Haiku `implementer`); each assignment runs in **its own git
+  worktree**; then a **single** Sonnet `verifier` merges the wave's branches back —
+  resolving any conflict in place — checks all the wave's steps against the
+  integrated tree, and on a **green** wave squashes it into one summary commit.
+  Worktrees are used for **every** assignment in a git repo — even a single
+  sequential one — so the workers' in-progress edits never flood the coordinator's
+  language server with false diagnostics; outside git it falls back to sequential
+  edits in the shared tree.
   The harness cuts each worker's isolation worktree from the repo's **default**
   branch, not the checked-out one — so `baseRef` (the current HEAD, re-probed each
   wave) is what carries the checked-out branch and prior waves' results to the
