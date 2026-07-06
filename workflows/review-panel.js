@@ -108,8 +108,10 @@ log("Panel: " + candidates.length + " review(s) [" + reviewModels.join(",") + "]
 if (candidates.length === 0) return { error: "Review produced no verdict." }
 
 // ─── Integrate: merge verdicts into one (≥Opus; most severe wins) ───
+// A single verdict needs no merge — return it directly (no integrator), even if an
+// integratorModel was named. Integrating one review is a wasted call.
 let review
-if (candidates.length > 1 || integSpecified) {
+if (candidates.length > 1) {
   phase("Integrate")
   const block = candidates.map((c, i) =>
     "### Reviewer [" + i + "] (" + (c._lens || "whole-change") + ")\nVerdict: " + c.verdict + "\nEvidence: " + (c.evidence || "") + "\nProblems: " + (c.problems || "none")

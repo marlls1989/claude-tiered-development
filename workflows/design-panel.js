@@ -138,8 +138,10 @@ log("Panel: " + candidates.length + " aspect-refined plan(s) [" + panelModels.jo
 if (candidates.length === 0) return { error: "Refinement produced no candidate plan." }
 
 // ─── Integrate: merge the aspect-refined plans into one coherent plan (≥Opus) ───
+// A single candidate IS the finished plan — nothing to merge, so return it directly
+// (no integrator), even if an integratorModel was named. Integrating one plan is a wasted call.
 let refined
-if (candidates.length > 1 || integSpecified) {
+if (candidates.length > 1) {
   phase("Integrate")
   const block = candidates.map((c, i) =>
     "### Plan [" + i + "]" + (c._aspect ? " — aspect owned: " + c._aspect : "") + "\nRecommendation: " + (c.recommendation || "") + "\nRisks: " + (c.risks || "") + "\nSteps:\n" +
