@@ -1,11 +1,11 @@
 export const meta = {
   name: "execute-wave",
-  description: "Execute ONE wave of an approved plan: a mandatory Sonnet composer groups the wave's steps into worker assignments (bundling cheap related steps, keeping substantive steps solo) and tiers each; each assignment runs in its own git worktree (Opus builder for substantive, Sonnet/Haiku implementer for mechanical/menial); then a single Sonnet integrator/verifier merges the wave's branches back — resolving any conflict in place — verifies every step against the integrated tree, and on a GREEN wave squashes it into one commit. Called once per wave by the tiered-development skill so the coordinator stays in the loop between waves. Worktrees are used whenever in a git repo to keep the coordinator's tree and its LSP diagnostics clean.",
-  whenToUse: "Invoked by the tiered-development skill, once per wave. Pass args as an object: { task, wave, steps, isGit, totalSteps?, baseRef? } — steps are this wave's steps (each with idx, title, change, complexity, files, verify). Leave a step's complexity blank to let the composer pick its tier; the composer also groups cheap steps into shared workers. Returns { wave, results, integration }.",
+  description: "Execute ONE wave of an approved plan: a mandatory Sonnet composer groups the wave's steps into worker assignments (bundling cheap related steps) and OWNS dispatch — running independent workers in parallel, merging tightly-coupled steps into one worker, or chaining dependent steps across stages. Each assignment runs in its own git worktree (Opus builder for substantive, Sonnet/Haiku implementer for mechanical/menial); between stages a Sonnet integrator merges that stage's branches so the next stage builds on the committed result. A final Sonnet integrator/verifier merges the last stage's branches — resolving any conflict in place — verifies every step against the integrated tree, and on a GREEN wave (optionally gated on the project's green bar) squashes it into one commit. Called once per wave by the tiered-development skill so the coordinator stays in the loop between waves. Worktrees are used whenever in a git repo to keep the coordinator's tree and its LSP diagnostics clean.",
+  whenToUse: "Invoked by the tiered-development skill, once per wave. Pass args as an object: { task, wave, steps, isGit, totalSteps?, baseRef?, greenBar? } — steps are this wave's steps (each with idx, title, change, complexity, files, verify, dependsOn). Leave a step's complexity blank to let the composer pick its tier; the composer also groups cheap steps into shared workers and resolves each dependsOn into parallel, merged, or chained dispatch. Returns { wave, results, integration }.",
   phases: [
-    { title: "Compose", detail: "Mandatory: a Sonnet composer groups the wave's steps into worker assignments (bundling cheap related steps, keeping substantive steps solo) and tiers each group", model: "sonnet" },
-    { title: "Implement", detail: "Each worker assignment (a group of steps) runs in its own worktree: Haiku (menial) / Sonnet (mechanical) implementer or Opus builder (substantive)", model: "opus" },
-    { title: "Integrate & verify", detail: "A single Sonnet integrator/verifier merges the wave's worktree branches into the working branch, resolving any conflict in place, verifies every step against the integrated tree (diffing against the kept worktrees to pinpoint merge faults), and on a GREEN wave squashes it into one summary commit", model: "sonnet" },
+    { title: "Compose", detail: "Mandatory: a Sonnet composer groups the wave's steps into worker assignments (bundling cheap related steps) and tiers each group", model: "sonnet" },
+    { title: "Implement", detail: "Workers run in dependency stages: each assignment (a group of steps) runs in its own worktree — Haiku (menial) / Sonnet (mechanical) implementer or Opus builder (substantive) — with a Sonnet integrator merging each non-final stage before the next stage dispatches onto its committed result", model: "opus" },
+    { title: "Integrate & verify", detail: "A single Sonnet integrator/verifier merges the final stage's worktree branches into the working branch, resolving any conflict in place, verifies every step against the integrated tree (diffing against the kept worktrees to pinpoint merge faults), and on a GREEN wave squashes it into one summary commit", model: "sonnet" },
   ],
 }
 
@@ -182,6 +182,18 @@ const WAVE_SCHEMA = {
         },
       },
     },
+  },
+}
+// Per-stage integrator (non-final stages, git only): merge just that stage's branches and report
+// the new tip; stage 1 also records the pre-merge HEAD as the wave's squash base.
+const STAGE_SCHEMA = {
+  type: "object", required: ["merged", "tip"],
+  properties: {
+    merged: { type: "integer", description: "how many of THIS stage's worker branches were merged into the working branch" },
+    resolved: { type: "string", description: "files where a conflict was resolved in place, else none" },
+    conflict: { type: "string", description: "files you could NOT resolve — merge abandoned, BLOCKER — else none" },
+    start: { type: "string", description: "stage 1 ONLY: the pre-merge HEAD sha recorded BEFORE merging anything" },
+    tip: { type: "string", description: "the post-merge HEAD sha — git rev-parse HEAD after the last ff merge" },
   },
 }
 
@@ -392,15 +404,21 @@ const implOpts = g => {
   const base = { label: g.label, phase: "Implement", model: t.model, agentType: t.agentType }
   return useWorktrees ? { ...base, isolation: "worktree" } : base
 }
-const implPrompt = g => {
+const implPrompt = (g, baseSha) => {
   const judgement = g.complexity === "substantive"
     ? "It needs implementation judgement — decide the 'how' — but do NOT re-open the design or expand scope. If realising it properly would require changing the approach, STOP and report a BLOCKER."
     : "Make exactly these change(s) — no more, and no design judgement. If any is ambiguous or impossible as written, STOP and report a BLOCKER rather than guessing."
-  const resetNote = useWorktrees && BASE_REF
-    ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + BASE_REF + "` so your work builds on the intended commit (its objects are already present in the shared repo). If that command fails, or the files/API this work depends on are still missing afterward, STOP and report a BLOCKER rather than guessing."
-    : ""
+  // Stage-1 workers reset onto BASE_REF (the coordinator's tip); stage>=2 workers reset onto the
+  // integrated TIP of the prior stage, which already CONTAINS their prerequisites' committed work.
+  const resetNote = !useWorktrees
+    ? ""
+    : g.stage >= 2
+      ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + baseSha + "` — this commit already CONTAINS the committed, integrated work of the step(s) this work depends on (" + g.deps.map(d => d.title).join("; ") + "); build on it, do not re-do it. If that command fails, or the code those steps were to add is missing afterward, STOP and report a BLOCKER."
+      : baseSha
+        ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + baseSha + "` so your work builds on the intended commit (its objects are already present in the shared repo). If that command fails, or the files/API this work depends on are still missing afterward, STOP and report a BLOCKER rather than guessing."
+        : ""
   const wtNote = useWorktrees
-    ? resetNote + "\n\nYou are working in an ISOLATED git worktree that may run in parallel with sibling workers. Your worktree may NOT contain in-progress changes from those siblings; if this work turns out to need code another worker was to add and you cannot find it, STOP and report a BLOCKER rather than guessing. When ALL the change(s) below are complete, COMMIT them in this worktree in a SINGLE commit with a concise message describing the work (no attribution trailer)."
+    ? resetNote + "\n\nYou are working in an ISOLATED git worktree that may run in parallel with sibling SAME-STAGE workers. Your worktree may NOT contain in-progress changes from those siblings; if this work turns out to need code another worker was to add and you cannot find it, STOP and report a BLOCKER rather than guessing. When ALL the change(s) below are complete, COMMIT them in this worktree in a SINGLE commit with a concise message describing the work (no attribution trailer)."
     : ""
   const multi = g.members.length > 1
   const body = multi
@@ -420,18 +438,98 @@ const implPrompt = g => {
   return body + judgement + " Match surrounding code and conventions." + wtNote + "\n\n" + COMMS
 }
 
-// ─── Implement ───
+// ─── Integrate helpers ───
+const conflicted = r => r && r.conflict && r.conflict !== "none"
+const validSha = s => typeof s === "string" && /^[0-9a-f]{7,40}$/i.test(s.trim())
+const groupLine = g => "- " + g.label + " [" + g.members.map(m => m.title).join("; ") + "]" + (g.files.length ? " → " + g.files.join(", ") : " → (unspecified)")
+
+// A NON-final stage's branches are merged NOW (git only) so the next stage's dependent workers can
+// reset onto committed work. Same rebase/ff-only/resolve rules as the final integrator, but it keeps
+// EVERY worktree for the final diff. Stage 1 also records the pre-merge HEAD as the wave's squash base.
+const stageIntegratePrompt = (stage, sgroups) =>
+  "## Integrate stage " + stage + " of wave " + WAVE + "\n" +
+  "This is part of a larger task: " + TASK + "\n\n" +
+  "Stage " + stage + "'s worker(s) each ran in their own git worktree under `.claude/worktrees/`, committing on their own branch (a worker may cover several bundled steps in one commit). Integrate ONLY these branches into the main working branch now, so the NEXT stage's dependent workers build on the committed result. The worker(s) and the files each touched:\n" +
+  sgroups.map(groupLine).join("\n") + "\n\n" +
+  "Do this from the main working tree (not a worktree):\n" +
+  (stage === 1
+    ? "0. BEFORE anything else, capture the pre-merge HEAD as the wave's squash base: run `git rev-parse HEAD` and RECORD the literal sha it prints into `start` (do not rely on a shell variable persisting between commands — note the actual sha; later stages merge on top of it). Then run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n"
+    : "0. Run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER. Earlier stages are already committed on this branch — leave `start` empty.\n") +
+  "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Match each branch above to a worker by the union of files it touched.\n" +
+  "2. Integrate THIS stage's branches ONE AT A TIME (do NOT create merge commits): for each such worktree whose branch is ahead of the working branch, replay it with `git -C <worktree-path> rebase <current-branch>`, then from the main working tree fast-forward with `git merge --ff-only <branch>`.\n" +
+  "3. If a rebase reports a CONFLICT, RESOLVE it in place rather than returning to the coordinator: reconcile the two sides so BOTH workers' stated intent is honoured (coupled workers may share files; combine the edits, never silently drop one side), then complete the rebase. Add every such file to `resolved`. ONLY if the correct reconciliation is genuinely ambiguous — you would have to guess intent — run `git -C <worktree-path> rebase --abort`, set `conflict` to those files, STOP the merge, and report a BLOCKER; do not guess.\n" +
+  "4. Do NOT remove any worktree — later stages and the final verification need them.\n" +
+  "Set `merged` to how many branches you integrated, `resolved` to the files you resolved a conflict in (or 'none'), `conflict` to any files you could not resolve (or 'none'), and `tip` to the post-merge HEAD sha (run `git rev-parse HEAD` after the last fast-forward).\n\n" +
+  COMMS
+
+// ─── Implement (staged dispatch) ───
+// Groups carry a dispatch `stage` (1 = no in-wave prereqs; N = one past its deepest prerequisite).
+// Dispatch stage by stage: stage 1 onto BASE_REF, each later stage onto the integrated TIP of the
+// prior stage so dependent workers build on committed work. Between stages (git only) a Sonnet
+// integrator merges that stage's branches and reports the new TIP; the final stage is integrated
+// and verified below. Non-git: the same stage order runs in the shared tree, no integrators.
 phase("Implement")
-const impls = await parallel(groups.map(g => () => agent(implPrompt(g), implOpts(g))))
+const maxStage = Math.max(...groups.map(g => g.stage))
+const impls = new Array(groups.length)
+let START = null, TIP = null, mergedSoFar = 0
+const resolvedParts = [], conflictParts = []
+let abort = null // { stage, reason, crash, files } — set to STOP dispatching further stages
+for (let stage = 1; stage <= maxStage && !abort; stage++) {
+  const stageEntries = groups.map((g, k) => ({ g, k })).filter(e => e.g.stage === stage)
+  const base = stage === 1 ? BASE_REF : TIP
+  const stageResults = await parallel(stageEntries.map(e => () => agent(implPrompt(e.g, base), implOpts(e.g))))
+  stageEntries.forEach((e, j) => { impls[e.k] = stageResults[j] }) // keep each group's original array position
+  log("wave " + WAVE + " stage " + stage + "/" + maxStage + ": " + stageEntries.length + " worker(s) [" +
+      stageEntries.map(e => e.g.label).join(", ") + "]" + (useWorktrees ? " onto " + (base || "(no base ref)") : " (shared tree)"))
+  // Integrate every NON-final stage now (git only) so the next stage resets onto committed work.
+  if (stage === maxStage || !useWorktrees) continue
+  const si = await agent(stageIntegratePrompt(stage, stageEntries.map(e => e.g)),
+    { label: "integrate:w" + WAVE + ":s" + stage, phase: "Implement", model: "sonnet", agentType: NS + "verifier", schema: STAGE_SCHEMA })
+  if (stage === 1) START = validSha(si && si.start) ? si.start.trim() : (BASE_REF || null)
+  if (si && Number.isInteger(si.merged)) mergedSoFar += si.merged
+  if (si && si.resolved && si.resolved !== "none") resolvedParts.push(si.resolved)
+  if (si && si.conflict && si.conflict !== "none") conflictParts.push(si.conflict)
+  if (!si) abort = { stage, reason: "stage integrator returned no result — the wave could not be confirmed merged", crash: true }
+  else if (conflicted(si)) abort = { stage, reason: "unresolved conflict in " + si.conflict, files: si.conflict }
+  else if (!validSha(si.tip)) abort = { stage, reason: "stage integrator returned no valid tip sha — the wave could not be confirmed merged" }
+  else { TIP = si.tip.trim(); log("wave " + WAVE + " stage " + stage + " integrated: " + si.merged + " branch(es), tip " + TIP + (si.resolved && si.resolved !== "none" ? ", RESOLVED in " + si.resolved : "")) }
+}
+
 // Verification is per-step but implementation was per-group: map each step idx to its group's report.
-// A crashed/empty worker reads identically in the verify prompt and the results.
+// A crashed/empty/never-dispatched worker reads identically in the verify prompt and the results.
 const reportByIdx = {}
 groups.forEach((g, k) => { const r = impls[k] || "(no report returned)"; g.idxs.forEach(idx => { reportByIdx[idx] = r }) })
 const implReport = idx => reportByIdx[idx] || "(no report returned)"
 log("wave " + WAVE + ": " + steps.length + " step(s) in " + groups.length + " worker(s)" + (useWorktrees ? " (isolated worktree each)" : " (shared tree, no git)"))
 
-// ─── Integrate & verify (one Sonnet agent: merge + resolve, then verify) ───
-const conflicted = r => r && r.conflict && r.conflict !== "none"
+// A non-final stage integrator crashed / hit an unresolvable conflict / returned no valid tip: STOP —
+// do not dispatch or verify further. Preserve the results + integration shape so the coordinator's
+// stop-on-conflict path still trips (a non-'none' conflict; `failed:true` only on a crashed agent).
+if (abort) {
+  const at = " — wave aborted at stage " + abort.stage + " (" + abort.reason + ")"
+  const results = steps.map(s => {
+    const g = groupByIdx[s.idx]
+    log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierOf(g).name + "] (" + s.title + "): unknown" + at)
+    return {
+      step: s.title, wave: WAVE, tier: tierOf(g).name, worktree: useWorktrees,
+      implemented: implReport(s.idx),
+      verdict: "unknown", evidence: "",
+      problems: (g.stage <= abort.stage ? "implemented but not verified" : "not dispatched") + at,
+      integrationConflict: abort.files,
+    }
+  })
+  const integration = {
+    merged: mergedSoFar,
+    conflict: abort.files || abort.reason,
+    resolved: resolvedParts.length ? [...new Set(resolvedParts)].join(", ") : "none",
+    squashed: false,
+    ...(abort.crash ? { failed: true } : {}),
+  }
+  log("wave " + WAVE + " ABORTED at stage " + abort.stage + ": " + abort.reason + " (" + mergedSoFar + " branch(es) merged before abort)")
+  return { wave: WAVE, results, integration }
+}
+
+// ─── Integrate & verify (one Sonnet agent: merge the final stage, then verify the whole wave) ───
 
 const stepBlocks = steps.map(s => {
   const g = groupByIdx[s.idx]
@@ -443,10 +541,20 @@ const stepBlocks = steps.map(s => {
     "\nImplementer reported:\n" + implReport(s.idx)
 }).join("\n\n")
 
-const integratePart = useWorktrees
-  ? "## Part A — Integrate the wave's worktrees\n" +
-    "Each WORKER below ran in its own git worktree under `.claude/worktrees/`, committing its change on its own branch (a worker may cover several bundled steps in one commit). The workers were assigned DISJOINT files, so rebasing them onto the working branch should be conflict-free. The worker(s) and the files each touched:\n" +
-    groups.map(g => "- " + g.label + " [" + g.members.map(m => m.title).join("; ") + "]" + (g.files.length ? " → " + g.files.join(", ") : " → (unspecified)")).join("\n") + "\n\n" +
+// Final-stage split: earlier stages were already integrated by their per-stage integrators (kept
+// worktrees), only the final stage's branches remain to merge here.
+const priorGroups = groups.filter(g => g.stage < maxStage)
+const finalGroups = groups.filter(g => g.stage === maxStage)
+const allBranches = groups.map(g => g.label).join(", ")
+
+let integratePart
+if (!useWorktrees) {
+  integratePart = "## Verify\n" +
+    "Set `merged` to 0 and `resolved`/`conflict` to 'none' — the step(s) below were edited directly in the current working tree, so there is nothing to merge.\n"
+} else if (maxStage === 1) {
+  integratePart = "## Part A — Integrate the wave's worktrees\n" +
+    "Each WORKER below ran in its own git worktree under `.claude/worktrees/`, committing its change on its own branch (a worker may cover several bundled steps in one commit). Coupled workers may share files; conflicts are expected only where work overlapped. The worker(s) and the files each touched:\n" +
+    groups.map(groupLine).join("\n") + "\n\n" +
     "Do this from the main working tree (not a worktree):\n" +
     "0. BEFORE anything else, capture the pre-merge HEAD as the squash base: run `git rev-parse HEAD` and RECORD the literal sha it prints (call it START). Do not rely on a shell variable persisting between commands — note the actual sha; you reset onto it verbatim if the wave passes. START, not any passed-in base ref, is the squash base. Then run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n" +
     "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Match each branch to a worker by the union of files it touched — you need this mapping in Part B.\n" +
@@ -456,8 +564,48 @@ const integratePart = useWorktrees
     "Set `merged` to how many branches you integrated, `resolved` to the files you resolved a conflict in (or 'none'), and `conflict` to any files you could not resolve (or 'none').\n\n" +
     "## Part B — Verify against the integrated tree\n" +
     "(Skip Part B and return `results: []` only if you aborted the merge on an unresolvable conflict in Part A.)\n"
-  : "## Verify\n" +
-    "Set `merged` to 0 and `resolved`/`conflict` to 'none' — the step(s) below were edited directly in the current working tree, so there is nothing to merge.\n"
+} else {
+  const step0 = validSha(START)
+    ? "0. The squash base is the sha " + START + " — use it VERBATIM; do NOT record current HEAD (earlier stages were already merged on top of it). Then run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n"
+    : "0. No usable squash base exists — do NOT squash; on GREEN set `squashed` false and `summary` 'none'. Then run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n"
+  integratePart = "## Part A — Integrate the final stage's worktrees\n" +
+    "Stages 1–" + (maxStage - 1) + " of this wave were ALREADY integrated onto the working branch by per-stage integrators — they are already on the working branch, do NOT re-apply them. Already-integrated worker(s):\n" +
+    priorGroups.map(groupLine).join("\n") + "\n" +
+    "PENDING — the final stage's worker(s), each still on its own branch in a git worktree under `.claude/worktrees/`; integrate ONLY these now:\n" +
+    finalGroups.map(groupLine).join("\n") + "\n\n" +
+    "Do this from the main working tree (not a worktree):\n" +
+    step0 +
+    "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Match each PENDING branch to a worker above by the union of files it touched — you need this mapping in Part B (the already-integrated worktrees were kept too, for diffing).\n" +
+    "2. Integrate ONLY the PENDING final-stage branches ONE AT A TIME (do NOT create merge commits): for each such worktree whose branch is ahead of the working branch, replay it with `git -C <worktree-path> rebase <current-branch>`, then from the main working tree fast-forward with `git merge --ff-only <branch>`.\n" +
+    "3. If a rebase reports a CONFLICT, RESOLVE it in place rather than returning to the coordinator: reconcile the two sides so BOTH workers' stated intent is honoured (coupled workers may share files; combine the edits, never silently drop one side), then complete the rebase. Add every such file to `resolved`. ONLY if the correct reconciliation is genuinely ambiguous — you would have to guess intent — run `git -C <worktree-path> rebase --abort`, set `conflict` to those files, STOP the merge, and report a BLOCKER; do not guess.\n" +
+    "4. Do NOT remove any worktree yet — Part B needs them all to check the merge.\n" +
+    "Set `merged` to how many PENDING branches you integrated, `resolved` to the files you resolved a conflict in (or 'none'), and `conflict` to any files you could not resolve (or 'none').\n\n" +
+    "## Part B — Verify against the integrated tree\n" +
+    "(Skip Part B and return `results: []` only if you aborted the merge on an unresolvable conflict in Part A.)\n"
+}
+
+// Part B diff instructions are identical whether one stage or many — every worktree was kept.
+const diffInstructions =
+  "Use the KEPT worktrees to pinpoint faults the merge itself introduced: for each step, diff the integrated tree against its worker branch (`git diff <worker-branch> -- <that step's files>`); a change dropped or mangled by the rebase/resolution shows up here, located precisely. Scrutinise any file you listed in `resolved` hardest.\n"
+const greenBlock = !useWorktrees
+  ? ""
+  : maxStage === 1
+    ? diffInstructions +
+      "AFTER verifying:\n" +
+      "- GREEN (EVERY step passed AND no merge-introduced fault): FIRST collapse the whole wave into ONE commit — `git reset --soft <START>` (the sha you recorded in Part A step 0), then a single `git commit -m \"<concise one-line summary of the wave's work>\"` (no attribution trailer; compose the summary from the steps' titles/intent). THEN remove each worktree (`git worktree remove <path>`) and FORCE-delete its branch with `git branch -D <branch>` — the squash rewrote history so the branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tip and no work is lost. Set `squashed` true and `summary` to that message. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
+      "  Edge case: if NO worker branch had a commit to merge (`merged` is 0, so the soft reset stages nothing and `git commit` would fail with \"nothing to commit\"), do NOT attempt the squash commit — set `squashed` false and `summary` 'none', and still remove any worktrees.\n" +
+      "- NOT GREEN (any step `needs-changes`/`fail`, or a merge fault): do NOT squash — LEAVE the per-step commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
+    : diffInstructions +
+      "AFTER verifying:\n" +
+      "- GREEN (EVERY step passed AND no merge-introduced fault): " +
+      (validSha(START)
+        ? "FIRST collapse the whole wave into ONE commit — `git reset --soft " + START + "` (the squash base named in Part A step 0, used VERBATIM), then a single `git commit -m \"<concise one-line summary of the wave's work>\"` (no attribution trailer; compose the summary from every step's titles/intent); set `squashed` true and `summary` to that message. Edge case: if the soft reset stages nothing (`git commit` fails with \"nothing to commit\"), do NOT force a commit — set `squashed` false and `summary` 'none'. "
+        : "do NOT squash — no usable squash base exists; set `squashed` false and `summary` 'none'. ") +
+      "THEN clean up ALL of the wave's worktrees (every stage): remove each (`git worktree remove <path>`) and FORCE-delete its branch with `git branch -D <branch>` — the branches are: " + allBranches + ". A squash rewrote history so a branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tips and no work is lost. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
+      "- NOT GREEN (any step `needs-changes`/`fail`, or a merge fault): do NOT squash — LEAVE the commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
+const greenBarLine = GREEN_BAR
+  ? "GREEN additionally requires the project green bar: run " + GREEN_BAR + " and quote the decisive line; any failure means NOT GREEN.\n"
+  : ""
 
 phase("Integrate & verify")
 const wave = await agent(
@@ -465,13 +613,8 @@ const wave = await agent(
   "This is part of a larger task: " + TASK + "\n\n" +
   integratePart +
   "\nAll the step(s) below are now in the current working tree. Check EACH against its STATED intent, sceptically — and look for interactions BETWEEN them that a per-file review would miss (an assumption that holds in one step but not once another lands). Prefer evidence: run the relevant build/test/lint once if cheap and quote the shortest decisive line.\n" +
-  (useWorktrees
-    ? "Use the KEPT worktrees to pinpoint faults the merge itself introduced: for each step, diff the integrated tree against its worker branch (`git diff <worker-branch> -- <that step's files>`); a change dropped or mangled by the rebase/resolution shows up here, located precisely. Scrutinise any file you listed in `resolved` hardest.\n" +
-    "AFTER verifying:\n" +
-    "- GREEN (EVERY step passed AND no merge-introduced fault): FIRST collapse the whole wave into ONE commit — `git reset --soft <START>` (the sha you recorded in Part A step 0), then a single `git commit -m \"<concise one-line summary of the wave's work>\"` (no attribution trailer; compose the summary from the steps' titles/intent). THEN remove each worktree (`git worktree remove <path>`) and FORCE-delete its branch with `git branch -D <branch>` — the squash rewrote history so the branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tip and no work is lost. Set `squashed` true and `summary` to that message. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
-    "  Edge case: if NO worker branch had a commit to merge (`merged` is 0, so the soft reset stages nothing and `git commit` would fail with \"nothing to commit\"), do NOT attempt the squash commit — set `squashed` false and `summary` 'none', and still remove any worktrees.\n" +
-    "- NOT GREEN (any step `needs-changes`/`fail`, or a merge fault): do NOT squash — LEAVE the per-step commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
-    : "") +
+  greenBlock +
+  greenBarLine +
   "Return a verdict PER STEP, keyed by the given idx.\n\n" +
   stepBlocks + "\n\n" + COMMS,
   { label: "verify:w" + WAVE, phase: "Integrate & verify", model: "sonnet", agentType: NS + "verifier", schema: WAVE_SCHEMA }
@@ -483,18 +626,21 @@ if (wave && Array.isArray(wave.results)) wave.results.forEach(r => { verdByIdx[r
 let integration = null
 if (useWorktrees) {
   if (wave && Number.isInteger(wave.merged)) {
+    // Union the final verifier's conflict/resolved with any accumulated from earlier stage integrators.
+    if (wave.resolved && wave.resolved !== "none") resolvedParts.push(wave.resolved)
+    if (wave.conflict && wave.conflict !== "none") conflictParts.push(wave.conflict)
     integration = {
-      merged: wave.merged,
-      conflict: (wave.conflict && wave.conflict !== "") ? wave.conflict : "none",
-      resolved: (wave.resolved && wave.resolved !== "") ? wave.resolved : "none",
+      merged: mergedSoFar + wave.merged,
+      conflict: conflictParts.length ? [...new Set(conflictParts)].join(", ") : "none",
+      resolved: resolvedParts.length ? [...new Set(resolvedParts)].join(", ") : "none",
       squashed: !!wave.squashed,
       summary: (wave.summary && wave.summary !== "none") ? wave.summary : undefined,
     }
   }
   // Never leave integration null: the wave could not be confirmed merged. A non-'none'
   // conflict here trips the coordinator's stop-on-conflict path via `conflicted`.
-  // merged:0 is a floor, not a fact: a crashed verifier may have merged some branches before dying, so this understates the true count. `failed:true` — not the conflict string — is the authoritative crash signal; downstream should key on `failed`, not a conflict-string match.
-  if (!integration) integration = { merged: 0, conflict: "verifier returned no result — the wave could not be confirmed merged", failed: true }
+  // merged is a floor, not a fact: a crashed verifier may have merged more branches before dying, so this understates the true count. `failed:true` — not the conflict string — is the authoritative crash signal; downstream should key on `failed`, not a conflict-string match.
+  if (!integration) integration = { merged: mergedSoFar, conflict: "verifier returned no result — the wave could not be confirmed merged", failed: true }
   log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" +
       (integration.resolved && integration.resolved !== "none" ? ", RESOLVED conflicts in: " + integration.resolved : "") +
       (integration.squashed ? ", squashed to 1 commit" + (integration.summary ? ": \"" + integration.summary + "\"" : "") : "") +
