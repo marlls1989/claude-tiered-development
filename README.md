@@ -48,7 +48,7 @@ fresh Opus/Sonnet/Haiku workers each build one well-scoped slice in its own work
 | `builder` | Opus | Primary implementer of substantive, judgement-requiring code. May decide the *how*, never re-opens the design. |
 | `implementer` | Sonnet / Haiku | Mechanical (Sonnet) or menial (Haiku) execution of a single precise step. No design judgement. |
 | `reader` | Sonnet / Haiku | Read-only research; returns a cited digest, not raw file dumps. |
-| `verifier` | Sonnet | Merges the wave's worker branches back (resolving conflicts in place), one adversarial check per wave against the integrated tree and the plan's stated intent (diffing against the kept worktrees to pinpoint merge-caused faults), and on a green wave squashes the wave into one summary commit. |
+| `verifier` | Sonnet | Merges the wave's worker branches back (resolving conflicts in place), one adversarial check per wave against the integrated tree and the plan's stated intent (diffing against the kept worktrees to pinpoint merge-caused faults). On staged waves it merges only the final stage's pending branches (earlier stages were integrated per-stage). Gates the green squash on the project's green bar before collapsing the wave into one summary commit. |
 
 ### Skill (`skills/tiered-development/`)
 
@@ -87,23 +87,27 @@ Fable sparingly.
   risk). The plan `integratorModel` is **≥Opus, never Sonnet**, and **defaults to the
   panel's top tier** (Fable if any panelist is Fable). Called as
   `Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })`;
-  returns `{ design, plan, waves }`.
-- **`execute-wave`** — runs one wave: a **mandatory** Sonnet composer groups the
-  wave's steps into worker assignments (bundling cheap related steps, keeping
-  substantive steps solo) and tiers each (substantive → Opus `builder`, mechanical →
-  Sonnet, menial → Haiku `implementer`); each assignment runs in **its own git
-  worktree**; then a **single** Sonnet `verifier` merges the wave's branches back —
-  resolving any conflict in place — checks all the wave's steps against the
-  integrated tree, and on a **green** wave squashes it into one summary commit.
-  Worktrees are used for **every** assignment in a git repo — even a single
-  sequential one — so the workers' in-progress edits never flood the coordinator's
-  language server with false diagnostics; outside git it falls back to sequential
-  edits in the shared tree.
+  returns `{ design, plan, waves, greenBar }` — steps carry explicit `dependsOn`,
+  and waves are complete, green, deliverable slices.
+- **`execute-wave`** — runs one wave: a **mandatory** Sonnet composer **owns
+  dispatch**, grouping the wave's steps into worker assignments and tiering each
+  (substantive → Opus `builder`, mechanical → Sonnet, menial → Haiku `implementer`);
+  independent workers run in parallel, while coupled steps are merged into one
+  worker or chained across stages, each stage integrated onto the working branch
+  before the next starts so chained workers build on their prerequisites'
+  committed result — an explicit `complexity` remains a floor. Each assignment
+  runs in **its own git worktree**; then a **single** Sonnet `verifier` merges the
+  wave's branches back — resolving any conflict in place — checks all the wave's
+  steps against the integrated tree, and on a **green** wave squashes it into one
+  summary commit. Worktrees are used for **every** assignment in a git repo — even
+  a single sequential one — so the workers' in-progress edits never flood the
+  coordinator's language server with false diagnostics; outside git it falls back
+  to sequential edits in the shared tree.
   The harness cuts each worker's isolation worktree from the repo's **default**
   branch, not the checked-out one — so `baseRef` (the current HEAD, re-probed each
   wave) is what carries the checked-out branch and prior waves' results to the
   workers. Called as
-  `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef } })`
+  `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, greenBar } })`
   once per wave.
 - **`review-panel`** — the deep final review: a fan-out of reviewers (each on a
   distinct lens) closed by a ≥Opus integrator that merges them into ONE verdict

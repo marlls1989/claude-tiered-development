@@ -23,6 +23,9 @@ const IS_GIT = !!A.isGit
 // from the repo's DEFAULT branch, not the checked-out one, so without this the workers
 // never see the current branch's state. Empty = older coordinator; skip the reset then.
 const BASE_REF = typeof A.baseRef === "string" ? A.baseRef.trim() : ""
+// The wave's green bar — the standard a dependent worker's integrated base must meet before
+// it is dispatched. Consumed by the later dispatch step; captured here alongside the args.
+const GREEN_BAR = typeof A.greenBar === "string" ? A.greenBar.trim() : ""
 if (!TASK) return { error: "No task given. Pass args as { task, wave, steps, isGit }." }
 if (RAW_STEPS.length === 0) return { error: "No steps given for this wave. Pass args as { task, wave, steps, isGit }." }
 
@@ -62,11 +65,28 @@ const steps = RAW_STEPS.map((s, i) => {
     files: Array.isArray(s.files) ? s.files : [],
     change: s.change || "",
     verify: s.verify || "",
+    dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn.filter(Number.isInteger) : [],
     complexity: cx.status === "ok" ? cx.tier : null, // filled by the composer if "auto"
     _cx: cx,
     _raw: s.complexity,
   }
 })
+
+// In-wave dependency edges. `dependsOn` is a plan-level DAG over step idx; keep only the refs
+// that point at another step IN THIS WAVE. A ref to an earlier wave's step is already built and
+// integrated (treated as already satisfied); a self-ref is meaningless. Dedupe as we go.
+const idxSet = new Set(steps.map(s => s.idx))
+steps.forEach(s => {
+  const uniq = [...new Set(s.dependsOn)]
+  if (uniq.includes(s.idx)) log("wave " + WAVE + ": step " + s.idx + " dependsOn itself — self-ref dropped")
+  s.deps = uniq.filter(d => {
+    if (d === s.idx) return false
+    if (idxSet.has(d)) return true
+    log("wave " + WAVE + ": step " + s.idx + " dependsOn " + d + " — not in this wave, treated as satisfied by an earlier wave")
+    return false
+  })
+})
+
 const TOTAL = Number.isInteger(A.totalSteps) && A.totalSteps > 0 ? A.totalSteps : steps.length
 
 // Scream, don't guess: refuse the wave on any UNRECOGNISED (non-empty) complexity.
@@ -92,6 +112,24 @@ if (dup.length > 0) {
   return { error: "execute-wave: duplicate step idx values (" + dup.join(", ") + ") — REFUSING to run this wave; idx is the join key for composer picks and verifier verdicts, so collisions silently mis-assign results. Give each step a unique idx and re-invoke." }
 }
 
+// Scream, don't guess: a cyclic dependsOn among this wave's steps is unbuildable as declared —
+// no order satisfies it. design-panel never emits cycles, so this guards hand-authored args
+// (same rationale as the duplicate-idx refusal above). Kahn over the in-wave deps; whatever
+// cannot be ordered sits on a cycle.
+const inDeg = {}
+steps.forEach(s => { inDeg[s.idx] = s.deps.length })
+const ordReady = steps.filter(s => inDeg[s.idx] === 0).map(s => s.idx)
+let ordDone = 0
+while (ordReady.length) {
+  const cur = ordReady.shift()
+  ordDone++
+  steps.forEach(s => { if (s.deps.includes(cur) && --inDeg[s.idx] === 0) ordReady.push(s.idx) })
+}
+if (ordDone < steps.length) {
+  const cyc = steps.filter(s => inDeg[s.idx] > 0).map(s => s.idx)
+  return { error: "execute-wave: dependency cycle among this wave's steps (idx " + cyc.join(", ") + ") — REFUSING to run this wave; a cyclic dependsOn is unbuildable as declared. Fix the plan's dependsOn and re-invoke." }
+}
+
 // Worktree isolation whenever this is a git repo — even for a single step, to keep
 // the coordinator's tree/LSP clean. Shared-tree sequential is the no-git fallback.
 const useWorktrees = IS_GIT
@@ -115,7 +153,7 @@ const GROUPS_SCHEMA = {
         properties: {
           steps: {
             type: "array", items: { type: "integer" },
-            description: "idx values of every step in this group, exactly as given; each group = ONE worker/worktree",
+            description: "idx values of every step in this group, exactly as given; each group = ONE worker/worktree; a group containing a step that depends on a step in ANOTHER group is dispatched only after that group commits and is integrated",
           },
           complexity: { enum: ["menial", "mechanical", "substantive"] },
         },
@@ -155,17 +193,30 @@ const maxTier = (...ts) => { const v = ts.filter(Boolean); return v.length ? v.s
 const floorOf = s => (s._cx.status === "ok" ? s._cx.tier : null) // an explicit complexity is a FLOOR, else null (composer decides)
 const makeGroup = (members, complexity) => {
   const cx = complexity || "mechanical" // safe middle, matches the old per-step fallback
-  const idxs = members.map(m => m.idx)
-  const files = [...new Set(members.flatMap(m => m.files))]
+  // Order members so a merged worker does dependent steps in dependency order; independents and
+  // ties fall back to ascending idx (the worker prompt tells it to work 'in order'). Step deps
+  // are acyclic (refused earlier), so this always drains — k<0 is unreachable.
+  const inGroup = new Set(members.map(m => m.idx))
+  const rest = [...members].sort((a, b) => a.idx - b.idx)
+  const done = new Set()
+  const ordered = []
+  while (rest.length) {
+    const k = rest.findIndex(m => m.deps.every(d => !inGroup.has(d) || done.has(d)))
+    const [next] = rest.splice(k >= 0 ? k : 0, 1)
+    ordered.push(next); done.add(next.idx)
+  }
+  const idxs = ordered.map(m => m.idx)
+  const files = [...new Set(ordered.flatMap(m => m.files))]
   const label = (cx === "substantive" ? "build:" : "impl:") + idxs.map(i => i + 1).join("+")
-  const title = members.length === 1 ? members[0].title
-    : members.length + " steps: " + members.map(m => m.title).join("; ")
-  members.forEach(m => { m.complexity = cx }) // a step's tier is its worker's tier (keeps per-step tierOf/results correct)
-  return { members, idxs, complexity: cx, files, label, title }
+  const title = ordered.length === 1 ? ordered[0].title
+    : ordered.length + " steps: " + ordered.map(m => m.title).join("; ")
+  ordered.forEach(m => { m.complexity = cx }) // a step's tier is its worker's tier (keeps per-step tierOf/results correct)
+  return { members: ordered, idxs, complexity: cx, files, label, title }
 }
 
-// The composer PROPOSES a grouping; buildGroups is AUTHORITATIVE. It guarantees three post-conditions:
-// (1) every idx covered exactly once; (2) no `substantive` group has >1 member; (3) no group tiered below a member's floor.
+// The composer PROPOSES a grouping; buildGroups + linkGroups are AUTHORITATIVE. Together they guarantee:
+// (1) every idx covered exactly once; (2) no group tiered below a member's floor;
+// (3) the group DAG is acyclic and respects step-level deps; (4) file-overlapping groups are ordered.
 const buildGroups = picked => {
   const byValue = new Map(steps.map(s => [s.idx, s]))
   const seen = new Set()
@@ -186,21 +237,113 @@ const buildGroups = picked => {
     log("compose w" + WAVE + ": step idx " + s.idx + " uncovered by composer — own group at its floor")
     cleaned.push({ members: [s], pick: floorOf(s) })
   }
-  // Substantive-solo + floor enforcement (authoritative — never trust the composer to protect a heavy step).
+  // Floor enforcement (authoritative — never trust the composer to under-tier a step). A
+  // substantive member now RAISES its group's tier rather than forcing the group to explode;
+  // dispatch coupling is decided by the composer and enforced by linkGroups' derived DAG.
   const out = []
   for (const { members, pick } of cleaned) {
-    if (pick === "substantive") { // composer flagged the whole bundle heavy → explode, each solo
-      if (members.length > 1) log("compose w" + WAVE + ": composer tiered a " + members.length + "-step group substantive — split to solo workers")
-      members.forEach(m => out.push(makeGroup([m], "substantive")))
-      continue
-    }
-    const floored = members.filter(m => floorOf(m) === "substantive") // an explicit substantive floor must run solo
-    const rest = members.filter(m => floorOf(m) !== "substantive")
-    if (floored.length && members.length > 1) log("compose w" + WAVE + ": pulled " + floored.length + " substantive-floor step(s) out of a bundle to run solo")
-    floored.forEach(m => out.push(makeGroup([m], "substantive")))
-    if (rest.length) out.push(makeGroup(rest, maxTier(pick, ...rest.map(floorOf))))
+    out.push(makeGroup(members, maxTier(pick, ...members.map(floorOf))))
   }
   return out
+}
+
+// linkGroups turns the flat grouping into a DAG: it derives group-level edges from the steps'
+// in-wave deps, repairs any cycle the composer's grouping created, adds file-overlap ordering
+// edges, then stamps each group with its prerequisite groups (`deps`) and a dispatch `stage`.
+// Authoritative for post-conditions (3) and (4). Runs on BOTH the composed and shortcut paths.
+const linkGroups = groups => {
+  const groupOf = idx => groups.find(g => g.idxs.includes(idx))
+  // Group h depends on group g (g!==h) iff a member of h has an in-wave dep on a member of g.
+  // Intra-group deps produce no edge (one worker does them in order). Returns h → Set(prereq g).
+  const deriveDeps = () => {
+    const map = new Map(groups.map(g => [g, new Set()]))
+    for (const h of groups)
+      for (const m of h.members)
+        for (const d of m.deps) {
+          const g = groupOf(d)
+          if (g && g !== h) map.get(h).add(g)
+        }
+    return map
+  }
+  // Find one directed cycle among `nodes` (following prereq edges), so it can be collapsed.
+  const findCycle = (nodes, dmap) => {
+    const inSet = new Set(nodes), onStack = new Set(), visited = new Set(), stack = []
+    let found = null
+    const dfs = n => {
+      visited.add(n); stack.push(n); onStack.add(n)
+      for (const nb of dmap.get(n)) {
+        if (found) break
+        if (!inSet.has(nb)) continue
+        if (onStack.has(nb)) { found = stack.slice(stack.indexOf(nb)); break }
+        if (!visited.has(nb)) dfs(nb)
+      }
+      stack.pop(); onStack.delete(n)
+    }
+    for (const n of nodes) { if (found) break; if (!visited.has(n)) dfs(n) }
+    return found
+  }
+  // Repair composer-split cycles: Kahn over the group DAG; if it stalls, MERGE one whole cycle
+  // into a single worker and re-derive. A group cycle can form even over acyclic step deps (e.g.
+  // composer groups {x,z},{y} over x→y→z). Group count strictly drops each merge → terminates.
+  let depsMap
+  for (;;) {
+    depsMap = deriveDeps()
+    const indeg = new Map(groups.map(g => [g, depsMap.get(g).size]))
+    const queue = groups.filter(g => indeg.get(g) === 0)
+    const seen = new Set(queue)
+    while (queue.length) {
+      const cur = queue.shift()
+      for (const h of groups) if (depsMap.get(h).has(cur)) {
+        indeg.set(h, indeg.get(h) - 1)
+        if (indeg.get(h) === 0 && !seen.has(h)) { seen.add(h); queue.push(h) }
+      }
+    }
+    if (seen.size === groups.length) break
+    const cycle = findCycle(groups.filter(g => !seen.has(g)), depsMap)
+    const merged = makeGroup(cycle.flatMap(g => g.members), maxTier(...cycle.map(g => g.complexity)))
+    log("wave " + WAVE + ": composer grouping formed a cyclic group dependency (" +
+        cycle.map(g => g.label).join(" ⇄ ") + ") — MERGED into one worker " + merged.label)
+    groups = groups.filter(g => !cycle.includes(g))
+    groups.push(merged)
+  }
+  // Does x transitively depend on y (following the current prereq edges)?
+  const dependsPath = (x, y) => {
+    const seen = new Set(), stack = [...depsMap.get(x)]
+    while (stack.length) {
+      const n = stack.pop()
+      if (n === y) return true
+      if (seen.has(n)) continue
+      seen.add(n)
+      for (const p of depsMap.get(n)) stack.push(p)
+    }
+    return false
+  }
+  // File-overlap ordering: two groups touching the same file must not run concurrently. For each
+  // such pair with NO dependency path either way, order the lower-min-idx group first; re-check
+  // reachability each time so an added edge can never close a cycle (idxs disjoint → no tie).
+  const minIdx = g => Math.min(...g.idxs)
+  const ordG = [...groups].sort((a, b) => minIdx(a) - minIdx(b))
+  for (let i = 0; i < ordG.length; i++)
+    for (let j = i + 1; j < ordG.length; j++) {
+      const a = ordG[i], b = ordG[j] // a has the smaller min idx
+      const shared = a.files.filter(f => b.files.includes(f))
+      if (!shared.length) continue
+      if (dependsPath(a, b) || dependsPath(b, a)) continue // already ordered by a dep path
+      depsMap.get(b).add(a) // a before b: b depends on a
+      log("wave " + WAVE + ": groups " + a.label + " and " + b.label + " share file(s) " +
+          shared.join(", ") + " — ordered " + a.label + " before " + b.label)
+    }
+  // Stamp prerequisite groups and a dispatch stage (1 + max prereq stage; 1 if none).
+  for (const g of groups) g.deps = [...depsMap.get(g)]
+  const stageOf = new Map()
+  const stage = g => {
+    if (stageOf.has(g)) return stageOf.get(g)
+    const s = g.deps.length ? 1 + Math.max(...g.deps.map(stage)) : 1
+    stageOf.set(g, s)
+    return s
+  }
+  for (const g of groups) g.stage = stage(g)
+  return groups
 }
 
 // ─── Compose: MANDATORY — group the wave's steps into worker assignments AND tier each group.
@@ -208,7 +351,7 @@ const buildGroups = picked => {
 const needCompose = steps.length > 1 || steps.some(s => s._cx.status === "auto")
 let groups
 if (!needCompose) {
-  groups = steps.map(s => makeGroup([s], floorOf(s)))
+  groups = linkGroups(steps.map(s => makeGroup([s], floorOf(s))))
 } else {
   phase("Compose")
   const picked = await agent(
@@ -217,17 +360,18 @@ if (!needCompose) {
     "Decide how to assign these steps to WORKERS. Each worker you define gets ONE git worktree and does every step you put in it. You are only PLANNING the assignment; you do not implement anything.\n\n" +
     "Rules (obey exactly):\n" +
     "- COVER every step's idx EXACTLY ONCE across all groups. Consolidate only — never split a single step across groups.\n" +
-    "- Bundle into a shared worker ONLY cheap, related menial/mechanical steps (small, mechanical, obvious-if-wrong edits that sit well together). Grouping saves a worktree per trivial step.\n" +
-    "- Keep every SUBSTANTIVE step in its OWN worker (solo) — a clean, focused context is why substantive work goes to its tier; never bundle it.\n" +
+    "- Steps may DEPEND on each other (listed per step). You choose the dispatch for coupled steps: MERGE them into ONE worker (it does them in dependency order in one worktree), or CHAIN them as separate workers (a dependent worker is dispatched in a LATER stage, onto the committed, integrated result of every group it depends on). Independent steps go to parallel workers. Bundle cheap related steps to save worktrees.\n" +
+    "- Prefer a solo worker for a SUBSTANTIVE step — a clean, focused context is why substantive work goes to its tier — but you MAY merge or chain coupled substantive steps when the coupling warrants it.\n" +
     "- A step's current tier is a FLOOR: never tier a group BELOW any member's stated tier. You may raise a blank/cheap step to a group's tier when you bundle it.\n" +
     SELECTION_PRINCIPLE + "\n\n" +
     "Return `groups`, each { steps:[idx,...], complexity } covering every idx below exactly once.\n\n" +
     steps.map(s => "### idx " + s.idx + " — " + s.title + " [tier: " + (floorOf(s) || "auto") + "]\n" +
-      s.change + (s.files.length ? "\nFiles: " + s.files.join(", ") : "") + (s.verify ? "\nDone when: " + s.verify : "")
+      s.change + (s.files.length ? "\nFiles: " + s.files.join(", ") : "") + (s.verify ? "\nDone when: " + s.verify : "") +
+      (s.deps.length ? "\nDepends on: idx " + s.deps.join(", ") : "")
     ).join("\n\n") + "\n\n" + COMMS,
     { label: "compose:w" + WAVE, phase: "Compose", model: "sonnet", schema: GROUPS_SCHEMA }
   )
-  groups = buildGroups(picked)
+  groups = linkGroups(buildGroups(picked))
   log("wave " + WAVE + " composer grouped " + steps.length + " step(s) into " + groups.length + " worker(s): " +
       groups.map(g => g.label).join(", ") + (picked && picked.rationale ? " — " + picked.rationale : ""))
 }

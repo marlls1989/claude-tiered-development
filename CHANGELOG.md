@@ -5,6 +5,22 @@ All notable changes to the **tiered-development** plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-07
+
+### Changed
+- **Waves are now complete, green, deliverable slices** rather than file-disjoint
+  parallel batches. Plan steps carry explicit `dependsOn` dependencies
+  (architect-declared ids, normalised to idx edges), and design-panel returns a
+  project `greenBar` (emitting a QUESTION when the project's green criteria are
+  unclear).
+- **The execute-wave composer owns dispatch.** Coupled steps may be merged into one
+  worker or chained across stages, with each non-final stage integrated onto the
+  working branch and the next stage's workers reset onto its tip. The
+  substantive-always-solo invariant is relaxed to composer discretion (an explicit
+  complexity remains a floor).
+- **The wave squash is gated on the project's green bar**, and verify/format work
+  is only ever a wave's closing step, never a standalone wave.
+
 ## [0.5.0] - 2026-07-06
 
 ### Changed

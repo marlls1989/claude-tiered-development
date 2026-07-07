@@ -1,7 +1,7 @@
 export const meta = {
   name: "design-panel",
-  description: "Refine a rough plan (drafted with the user during brainstorming) into a numbered, wave-grouped, dispatchable implementation plan. By default a cheap Sonnet composer picks the architect composition; the coordinator overrides via panelModels — a single Opus/Fable architect, an all-Opus/all-Fable/mixed panel, or the two-tier pattern (an Opus panel then a ≥Opus integrator, optionally Fable) — only when the user asks for a specific one. It does NOT design from a blank slate; it refines what the user and coordinator already shaped.",
-  whenToUse: "Invoked by the tiered-development skill. Pass args as an object: { level, task, roughPlan, panelModels?, integratorModel? } — level is 'quick' | 'standard' | 'deep'; panelModels is a 1–5 array of 'opus'/'fable'; integratorModel ('opus'|'fable', never Sonnet) runs the final plan integrator. Omit panelModels/integratorModel to let a Sonnet composer choose. Returns { design, plan }.",
+  description: "Refine a rough plan (drafted with the user during brainstorming) into a numbered, wave-grouped, dispatchable implementation plan with explicit inter-step dependsOn dependencies and a project greenBar (the build/test/lint command(s) that define a green tree). By default a cheap Sonnet composer picks the architect composition; the coordinator overrides via panelModels — a single Opus/Fable architect, an all-Opus/all-Fable/mixed panel, or the two-tier pattern (an Opus panel then a ≥Opus integrator, optionally Fable) — only when the user asks for a specific one. It does NOT design from a blank slate; it refines what the user and coordinator already shaped.",
+  whenToUse: "Invoked by the tiered-development skill. Pass args as an object: { level, task, roughPlan, panelModels?, integratorModel? } — level is 'quick' | 'standard' | 'deep'; panelModels is a 1–5 array of 'opus'/'fable'; integratorModel ('opus'|'fable', never Sonnet) runs the final plan integrator. Omit panelModels/integratorModel to let a Sonnet composer choose. Returns { design, plan, waves, greenBar }.",
   phases: [
     { title: "Compose", detail: "Only when the composition is unspecified: a Sonnet composer picks the panel models + integrator", model: "sonnet" },
     { title: "Refine", detail: "Architect(s) (Opus and/or Fable) refine the rough plan into a design summary + a numbered, wave-grouped plan" },
@@ -61,17 +61,20 @@ const PLAN_SCHEMA = {
     recommendation: { type: "string", description: "the settled approach in one or two sentences, for the design summary" },
     rationale: { type: "string", description: "why this approach; what is deliberately out of scope" },
     risks: { type: "string", description: "main risks or open questions, or 'none'" },
+    greenBar: { type: "string", description: "the concrete build/test/lint command(s), from the PROJECT'S OWN rules, that define a green tree — every wave must end green by this bar; leave empty and raise a QUESTION in `risks` if the project's green criteria are unclear" },
     steps: {
       type: "array",
-      description: "steps grouped into ascending waves; a wave runs in parallel, so steps sharing a wave MUST be independent and touch DISJOINT files. Higher waves may depend on lower ones.",
+      description: "steps grouped into ascending waves; a wave is a COMPLETE, GREEN, DELIVERABLE slice — a milestone leaving the tree green per the project's own rules; same-wave steps MAY be dependent and MAY share files, but every same-wave dependency MUST be declared in dependsOn; later waves build on earlier waves' integrated result.",
       items: {
         type: "object", required: ["title", "change", "complexity", "wave"],
         properties: {
+          id: { type: "string", description: "short stable identifier the author assigns, unique across the plan (e.g. 'schema', 'dispatch'); other steps reference it in dependsOn" },
           title: { type: "string", description: "short imperative label" },
-          files: { type: "array", items: { type: "string" }, description: "repo-relative files this step touches — used to guarantee waves are file-disjoint" },
+          files: { type: "array", items: { type: "string" }, description: "repo-relative files this step touches — the dispatcher uses them to route and order workers" },
           change: { type: "string", description: "the concrete change to make" },
           complexity: { enum: ["menial", "mechanical", "substantive"], description: TIERS_DESC },
-          wave: { type: "integer", description: "1-based wave number. Steps in the same wave run concurrently and must be independent + file-disjoint; a step that depends on another must be in a later wave." },
+          wave: { type: "integer", description: "1-based wave number. A wave is a self-contained GREEN milestone; same-wave steps MAY depend on each other, but every intra-wave dependency MUST be declared via dependsOn; the executor resolves dispatch (parallel, merged, or chained). Later waves build on earlier waves' integrated result." },
+          dependsOn: { type: "array", items: { type: "string" }, description: "ids of steps this step builds on — same or EARLIER wave only, never later; same-wave dependencies are resolved downstream by the dispatch composer (merge into one worker or chain workers)" },
           verify: { type: "string", description: "how to confirm this step is correct" },
         },
       },
@@ -84,7 +87,7 @@ const roughBlock = ROUGH ? "\n\nRough plan drafted with the user (refine THIS �
 const ASPECTS = [
   "correctness & edge-case handling",
   "architecture, interfaces & reuse of existing code over new",
-  "wave decomposition — step independence, file-disjointness, ordering & dependencies",
+  "wave decomposition — deliverable slicing, explicit dependencies & ordering",
   "verification — how each step is proven correct",
   "risk & impact — blast radius, what could break, migration/rollback",
 ]
@@ -95,8 +98,8 @@ const refinePrompt = aspect =>
     : "\n") +
   GROUNDING + "\n\n" +
   "Turn the rough plan into a concrete plan of at most " + MAX_STEPS + " steps. For each step: name the file(s), describe the concrete change, state what to verify, tag its complexity (" + TIERS_DESC + "), and assign a 1-based WAVE number. Choose the complexity by weighing the judgement the step needs against the cost of getting it wrong.\n\n" +
-  "Waves are the parallelism unit: every step in the same wave runs CONCURRENTLY in a separate workspace, so steps sharing a wave MUST be independent and touch DISJOINT files. If step B depends on step A, or they touch the same file, put B in a later wave. Pack genuinely independent steps into the same wave. Leave NO design judgement unresolved downstream — 'substantive' means judgement about implementation, not about the design, which is settled here. Also return recommendation/rationale/risks as a short design summary.\n\n" +
-  "If the rough plan is internally contradictory or its premise is wrong given the code, STOP and return that as a BLOCKER instead of a plan.\n\n" + COMMS
+  "A wave is a COMPLETE, GREEN, DELIVERABLE slice — a milestone that leaves the tree green per the project's own rules; same-wave steps MAY be dependent and MAY share files, and later waves build on earlier waves' integrated result. Give each step a short stable `id` and declare inter-step dependencies via `dependsOn` (the downstream composer turns them into parallel, merged, or chained dispatch); a dependency may only point at a same-wave or EARLIER step, never a later one. Include verify/format work only ever as a wave's CLOSING step covering that wave's own work — NEVER a wave whose steps are all verification/formatting. Determine the project's green bar from its own rules and emit it as `greenBar`. Leave NO design judgement unresolved downstream — 'substantive' means judgement about implementation, not about the design, which is settled here. Also return recommendation/rationale/risks as a short design summary.\n\n" +
+  "If the rough plan is internally contradictory or its premise is wrong given the code, STOP and return that as a BLOCKER instead of a plan. If the project's green criteria are not determinable, put a QUESTION (marked QUESTION:) in `risks` and leave greenBar empty rather than guessing.\n\n" + COMMS
 
 // ─── Compose: pick the architect composition when the coordinator did not ───
 let compositionRationale = ""
@@ -144,13 +147,13 @@ let refined
 if (candidates.length > 1) {
   phase("Integrate")
   const block = candidates.map((c, i) =>
-    "### Plan [" + i + "]" + (c._aspect ? " — aspect owned: " + c._aspect : "") + "\nRecommendation: " + (c.recommendation || "") + "\nRisks: " + (c.risks || "") + "\nSteps:\n" +
-    (Array.isArray(c.steps) ? c.steps : []).map((s, k) => "  " + (k + 1) + ". (wave " + s.wave + ", " + s.complexity + ") " + s.title + " — " + s.change + (s.files && s.files.length ? " [" + s.files.join(", ") + "]" : "")).join("\n")
+    "### Plan [" + i + "]" + (c._aspect ? " — aspect owned: " + c._aspect : "") + "\nRecommendation: " + (c.recommendation || "") + "\nGreenBar: " + (c.greenBar || "") + "\nRisks: " + (c.risks || "") + "\nSteps:\n" +
+    (Array.isArray(c.steps) ? c.steps : []).map((s, k) => "  " + (k + 1) + ". (wave " + s.wave + ", " + s.complexity + ")" + (s.id ? " id=" + s.id : "") + (Array.isArray(s.dependsOn) && s.dependsOn.length ? " deps=[" + s.dependsOn.join(",") + "]" : "") + " " + s.title + " — " + s.change + (s.files && s.files.length ? " [" + s.files.join(", ") + "]" : "")).join("\n")
   ).join("\n\n")
   const aspectsLine = candidates.map(c => c._aspect).filter(Boolean).join("; ")
   refined = await agent(
     "## Integrate the aspect-refined plans into ONE\nTask: " + TASK + roughBlock + "\n" +
-    "You have " + candidates.length + " plan(s)" + (aspectsLine ? ", each refined by a specialist who OWNED one aspect (" + aspectsLine + ")" : "") + ". Merge them into ONE coherent plan that carries each aspect's strongest contribution — the correctness specialist's edge-case steps, the architecture specialist's structure/reuse, the decomposition specialist's waving, the verification specialist's checks, and so on — resolving any conflicts between them. Keep it to at most " + MAX_STEPS + " steps, correctly waved (same-wave steps independent + file-disjoint), each step tagged with complexity (" + TIERS_DESC + "). " + GROUNDING + "\n\n" + block + "\n\n" + COMMS,
+    "You have " + candidates.length + " plan(s)" + (aspectsLine ? ", each refined by a specialist who OWNED one aspect (" + aspectsLine + ")" : "") + ". Merge them into ONE coherent plan that carries each aspect's strongest contribution — the correctness specialist's edge-case steps, the architecture specialist's structure/reuse, the decomposition specialist's waving, the verification specialist's checks, and so on — resolving any conflicts between them. Keep it to at most " + MAX_STEPS + " steps, correctly waved (each wave a self-contained green deliverable; same-wave dependencies declared via id/dependsOn; no verify/format-only wave), each step tagged with complexity (" + TIERS_DESC + "). PRESERVE each step's id and dependsOn edges, and emit one reconciled greenBar. " + GROUNDING + "\n\n" + block + "\n\n" + COMMS,
     { label: "integrate", phase: "Integrate", model: integratorModel, effort: "max", agentType: NS + "architect", schema: PLAN_SCHEMA }
   )
 } else {
@@ -163,7 +166,8 @@ if (!refined || !Array.isArray(refined.steps) || refined.steps.length === 0) {
 
 // Attach a stable 1-based index; normalise wave number and complexity (three tiers).
 const TIERS = ["menial", "mechanical", "substantive"]
-const steps = refined.steps.slice(0, MAX_STEPS).map((s, i) => ({
+const rawSteps = refined.steps.slice(0, MAX_STEPS)
+const steps = rawSteps.map((s, i) => ({
   idx: i,
   title: s.title,
   files: Array.isArray(s.files) ? s.files : [],
@@ -171,7 +175,71 @@ const steps = refined.steps.slice(0, MAX_STEPS).map((s, i) => ({
   complexity: TIERS.includes(s.complexity) ? s.complexity : "mechanical",
   wave: Number.isInteger(s.wave) && s.wave > 0 ? s.wave : 1,
   verify: s.verify || "",
+  dependsOn: [],
 }))
+
+// ─── Normalise inter-step dependencies (author ids → idx edges) ───
+// Authors label steps with a stable `id` and point `dependsOn` at those ids; we
+// resolve them to index edges, drop anything invalid, and break same-wave cycles
+// so the dispatch composer downstream gets a clean DAG. `id` is author-facing
+// only — it never leaves this function. Every dropped edge is logged and, if any,
+// summarised into the design risks.
+const droppedEdges = []
+
+// Pass 1: resolve each step's effective id (falling back to a positional id), and
+// build id→idx keeping the FIRST claimant of a duplicate so refs stay deterministic.
+const idToIdx = new Map()
+const effIds = rawSteps.map((s, i) => (typeof s.id === "string" && s.id.trim()) ? s.id.trim() : "step-" + (i + 1))
+effIds.forEach((id, i) => {
+  if (idToIdx.has(id)) log("normalise: duplicate step id '" + id + "' — keeping step " + (idToIdx.get(id) + 1) + ", ignoring step " + (i + 1))
+  else idToIdx.set(id, i)
+})
+
+// Pass 2: turn each author dependsOn (a list of ids) into a deduped idx array,
+// dropping unknown ids, self-references, and any edge onto a LATER wave (which
+// contradicts wave ordering — deps may only point same-wave or earlier).
+steps.forEach((step, i) => {
+  const authored = Array.isArray(rawSteps[i].dependsOn) ? rawSteps[i].dependsOn : []
+  const seen = new Set()
+  authored.forEach(dep => {
+    const id = typeof dep === "string" ? dep.trim() : ""
+    const j = idToIdx.has(id) ? idToIdx.get(id) : -1
+    if (j < 0) { droppedEdges.push(effIds[i] + "→" + (id || String(dep)) + " (unknown)"); log("normalise: step " + (i + 1) + " drops unknown dependency '" + dep + "'"); return }
+    if (j === i) { droppedEdges.push(effIds[i] + "→" + effIds[j] + " (self)"); log("normalise: step " + (i + 1) + " drops self-dependency"); return }
+    if (steps[j].wave > step.wave) { droppedEdges.push(effIds[i] + "→" + effIds[j] + " (later wave)"); log("normalise: step " + (i + 1) + " drops dependency on later-wave step " + (j + 1)); return }
+    if (!seen.has(j)) { seen.add(j); step.dependsOn.push(j) }
+  })
+})
+
+// Pass 3: break same-wave cycles (cross-wave cycles are impossible after pass 2,
+// since every surviving edge points same-wave or earlier). Add edges one at a
+// time in listed order, skipping any whose target can already reach the source.
+const adj = steps.map(() => [])
+const reaches = (from, to) => {
+  const stack = [from], seen = new Set()
+  while (stack.length) {
+    const n = stack.pop()
+    if (n === to) return true
+    if (seen.has(n)) continue
+    seen.add(n)
+    for (const m of adj[n]) stack.push(m)
+  }
+  return false
+}
+steps.forEach((step, i) => {
+  const kept = []
+  step.dependsOn.forEach(j => {
+    if (reaches(j, i)) { droppedEdges.push(effIds[i] + "→" + effIds[j] + " (cycle)"); log("normalise: step " + (i + 1) + " drops dependency on step " + (j + 1) + " to break a same-wave cycle") }
+    else { adj[i].push(j); kept.push(j) }
+  })
+  step.dependsOn = kept
+})
+
+if (droppedEdges.length) {
+  const note = "plan normalisation dropped " + droppedEdges.length + " invalid dependency edge(s): " + droppedEdges.join(", ") + "."
+  refined.risks = refined.risks ? refined.risks + " " + note : note
+}
+
 const waveNums = [...new Set(steps.map(s => s.wave))].sort((a, b) => a - b)
 log("Plan: " + steps.length + " steps across " + waveNums.length + " wave(s)")
 
@@ -181,4 +249,5 @@ return {
   design: { recommendation: refined.recommendation || "", rationale: refined.rationale || "", risks: refined.risks || "" },
   plan: steps,
   waves: waveNums,
+  greenBar: typeof refined.greenBar === "string" ? refined.greenBar.trim() : "",
 }
