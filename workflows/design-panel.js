@@ -185,13 +185,17 @@ const steps = rawSteps.map((s, i) => ({
 // only — it never leaves this function. Every dropped edge is logged and, if any,
 // summarised into the design risks.
 const droppedEdges = []
+const idCollisions = []
 
 // Pass 1: resolve each step's effective id (falling back to a positional id), and
 // build id→idx keeping the FIRST claimant of a duplicate so refs stay deterministic.
 const idToIdx = new Map()
 const effIds = rawSteps.map((s, i) => (typeof s.id === "string" && s.id.trim()) ? s.id.trim() : "step-" + (i + 1))
 effIds.forEach((id, i) => {
-  if (idToIdx.has(id)) log("normalise: duplicate step id '" + id + "' — keeping step " + (idToIdx.get(id) + 1) + ", ignoring step " + (i + 1))
+  if (idToIdx.has(id)) {
+    idCollisions.push(id + " (kept step " + (idToIdx.get(id) + 1) + ", dropped step " + (i + 1) + ")")
+    log("normalise: duplicate step id '" + id + "' — keeping step " + (idToIdx.get(id) + 1) + ", ignoring step " + (i + 1))
+  }
   else idToIdx.set(id, i)
 })
 
@@ -234,6 +238,11 @@ steps.forEach((step, i) => {
   })
   step.dependsOn = kept
 })
+
+if (idCollisions.length) {
+  const note = "plan normalisation resolved " + idCollisions.length + " id collision(s) by first-occurrence: " + idCollisions.join(", ") + "."
+  refined.risks = refined.risks ? refined.risks + " " + note : note
+}
 
 if (droppedEdges.length) {
   const note = "plan normalisation dropped " + droppedEdges.length + " invalid dependency edge(s): " + droppedEdges.join(", ") + "."

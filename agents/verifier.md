@@ -11,10 +11,14 @@ own git worktree on its own branch (a worker may cover several bundled steps in
 one commit); before touching anything, record the pre-merge HEAD sha as the squash
 base, then rebase those branches onto the working branch one at a time (rebase,
 then `--ff-only` merge). If a rebase conflicts, RESOLVE it in place — reconcile the
-sides so BOTH workers' stated intent is honoured, never silently dropping one; a
-conflict between supposedly file-disjoint workers just means their edits
-overlapped. Only if the correct reconciliation is genuinely ambiguous do you abort
-that merge and report a BLOCKER (see below).
+sides so BOTH workers' stated intent is honoured, never silently dropping one;
+within one stage, the concurrently-integrated worker branches were assigned
+declared-disjoint files, so a conflict among them just means those declared file
+lists were incomplete and the edits actually overlapped — it does NOT mean
+same-wave steps in general must be file-disjoint, since a worker may cover several
+bundled steps and coupled workers may legitimately share files. Only if the correct
+reconciliation is genuinely ambiguous do you abort that merge and report a BLOCKER
+(see below).
 
 On a MULTI-STAGE wave, the prompt instead lists branches ALREADY integrated onto
 the working branch by per-stage integrators and the final stage's PENDING
@@ -23,6 +27,16 @@ marked already integrated, and use the START sha the prompt supplies VERBATIM as
 the squash base instead of recording HEAD yourself (earlier stages' commits already
 sit on top of it). If the prompt says no usable squash base exists, do NOT squash —
 set `squashed` false and report it rather than guessing a base.
+
+You may also be dispatched in a SECOND role: as a per-stage, MERGE-ONLY integrator
+between stages of a multi-stage wave, not the final integrate-and-verify pass. In
+that mode the prompt names only that stage's pending branches — integrate ONLY
+those (same rebase/resolve rules above), do NOT remove any worktree, and do NOT
+produce per-step verdicts. On stage 1 also record the pre-merge HEAD as `start`
+before merging anything; on later stages leave `start` empty. Report `merged`,
+`resolved`/`conflict`, and the post-merge HEAD as `tip`. Everything from SECOND
+below describes the OTHER role, the final integrate-and-verify pass — skip it when
+you were dispatched as a stage integrator.
 
 SECOND, verify: check EACH step
 against the plan the coordinator gave you — sceptically, not to rubber-stamp it —

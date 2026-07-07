@@ -413,7 +413,7 @@ const implPrompt = (g, baseSha) => {
   const resetNote = !useWorktrees
     ? ""
     : g.stage >= 2
-      ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + baseSha + "` — this commit already CONTAINS the committed, integrated work of the step(s) this work depends on (" + g.deps.map(d => d.title).join("; ") + "); build on it, do not re-do it. If that command fails, or the code those steps were to add is missing afterward, STOP and report a BLOCKER."
+      ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + baseSha + "` — this commit already CONTAINS the committed, integrated result of the prerequisite group(s) this work depends on (" + g.deps.map(d => d.title).join("; ") + "); build on it, do not re-do it. Those titles are the prerequisite GROUPS, and a group may bundle additional steps, so they need not match one-to-one — rely on the actual tree state, not on the titles. If that command fails, or the code you depend on is missing afterward, STOP and report a BLOCKER."
       : baseSha
         ? "\n\nThis worktree was created by the harness from the repository's DEFAULT branch, which is the WRONG base for this work. BEFORE reading or editing anything, run `git reset --hard " + baseSha + "` so your work builds on the intended commit (its objects are already present in the shared repo). If that command fails, or the files/API this work depends on are still missing afterward, STOP and report a BLOCKER rather than guessing."
         : ""
@@ -446,17 +446,21 @@ const groupLine = g => "- " + g.label + " [" + g.members.map(m => m.title).join(
 // A NON-final stage's branches are merged NOW (git only) so the next stage's dependent workers can
 // reset onto committed work. Same rebase/ff-only/resolve rules as the final integrator, but it keeps
 // EVERY worktree for the final diff. Stage 1 also records the pre-merge HEAD as the wave's squash base.
-const stageIntegratePrompt = (stage, sgroups) =>
+const stageIntegratePrompt = (stage, sgroups, priorGroups) =>
   "## Integrate stage " + stage + " of wave " + WAVE + "\n" +
   "This is part of a larger task: " + TASK + "\n\n" +
-  "Stage " + stage + "'s worker(s) each ran in their own git worktree under `.claude/worktrees/`, committing on their own branch (a worker may cover several bundled steps in one commit). Integrate ONLY these branches into the main working branch now, so the NEXT stage's dependent workers build on the committed result. The worker(s) and the files each touched:\n" +
+  (priorGroups.length
+    ? "Stages 1–" + (stage - 1) + " of this wave were ALREADY integrated onto the working branch by earlier per-stage integrators — they are already on the working branch, do NOT re-apply them. Already-integrated worker(s):\n" +
+      priorGroups.map(groupLine).join("\n") + "\n\n"
+    : "") +
+  "PENDING — stage " + stage + "'s worker(s) each ran in their own git worktree under `.claude/worktrees/`, committing on their own branch (a worker may cover several bundled steps in one commit). Integrate ONLY these branches into the main working branch now, so the NEXT stage's dependent workers build on the committed result. The worker(s) and the files each touched:\n" +
   sgroups.map(groupLine).join("\n") + "\n\n" +
   "Do this from the main working tree (not a worktree):\n" +
   (stage === 1
     ? "0. BEFORE anything else, capture the pre-merge HEAD as the wave's squash base: run `git rev-parse HEAD` and RECORD the literal sha it prints into `start` (do not rely on a shell variable persisting between commands — note the actual sha; later stages merge on top of it). Then run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n"
     : "0. Run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER. Earlier stages are already committed on this branch — leave `start` empty.\n") +
-  "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Match each branch above to a worker by the union of files it touched.\n" +
-  "2. Integrate THIS stage's branches ONE AT A TIME (do NOT create merge commits): for each such worktree whose branch is ahead of the working branch, replay it with `git -C <worktree-path> rebase <current-branch>`, then from the main working tree fast-forward with `git merge --ff-only <branch>`.\n" +
+  "1. Run `git worktree list --porcelain` to find the worktrees under `.claude/worktrees/` and the branch each is on. Match each PENDING branch to a worker above by the union of files it touched; any already-integrated prior-stage worktrees are still present but their branches are ancestors of the working branch — do NOT re-apply them.\n" +
+  "2. Integrate ONLY THIS stage's PENDING branches ONE AT A TIME (do NOT create merge commits): for each such worktree whose branch is ahead of the working branch, replay it with `git -C <worktree-path> rebase <current-branch>`, then from the main working tree fast-forward with `git merge --ff-only <branch>`.\n" +
   "3. If a rebase reports a CONFLICT, RESOLVE it in place rather than returning to the coordinator: reconcile the two sides so BOTH workers' stated intent is honoured (coupled workers may share files; combine the edits, never silently drop one side), then complete the rebase. Add every such file to `resolved`. ONLY if the correct reconciliation is genuinely ambiguous — you would have to guess intent — run `git -C <worktree-path> rebase --abort`, set `conflict` to those files, STOP the merge, and report a BLOCKER; do not guess.\n" +
   "4. Do NOT remove any worktree — later stages and the final verification need them.\n" +
   "Set `merged` to how many branches you integrated, `resolved` to the files you resolved a conflict in (or 'none'), `conflict` to any files you could not resolve (or 'none'), and `tip` to the post-merge HEAD sha (run `git rev-parse HEAD` after the last fast-forward).\n\n" +
@@ -483,7 +487,7 @@ for (let stage = 1; stage <= maxStage && !abort; stage++) {
       stageEntries.map(e => e.g.label).join(", ") + "]" + (useWorktrees ? " onto " + (base || "(no base ref)") : " (shared tree)"))
   // Integrate every NON-final stage now (git only) so the next stage resets onto committed work.
   if (stage === maxStage || !useWorktrees) continue
-  const si = await agent(stageIntegratePrompt(stage, stageEntries.map(e => e.g)),
+  const si = await agent(stageIntegratePrompt(stage, stageEntries.map(e => e.g), groups.filter(g => g.stage < stage)),
     { label: "integrate:w" + WAVE + ":s" + stage, phase: "Implement", model: "sonnet", agentType: NS + "verifier", schema: STAGE_SCHEMA })
   if (stage === 1) START = validSha(si && si.start) ? si.start.trim() : (BASE_REF || null)
   if (si && Number.isInteger(si.merged)) mergedSoFar += si.merged
@@ -545,7 +549,6 @@ const stepBlocks = steps.map(s => {
 // worktrees), only the final stage's branches remain to merge here.
 const priorGroups = groups.filter(g => g.stage < maxStage)
 const finalGroups = groups.filter(g => g.stage === maxStage)
-const allBranches = groups.map(g => g.label).join(", ")
 
 let integratePart
 if (!useWorktrees) {
@@ -553,7 +556,7 @@ if (!useWorktrees) {
     "Set `merged` to 0 and `resolved`/`conflict` to 'none' — the step(s) below were edited directly in the current working tree, so there is nothing to merge.\n"
 } else if (maxStage === 1) {
   integratePart = "## Part A — Integrate the wave's worktrees\n" +
-    "Each WORKER below ran in its own git worktree under `.claude/worktrees/`, committing its change on its own branch (a worker may cover several bundled steps in one commit). Coupled workers may share files; conflicts are expected only where work overlapped. The worker(s) and the files each touched:\n" +
+    "Each WORKER below ran in its own git worktree under `.claude/worktrees/`, committing its change on its own branch (a worker may cover several bundled steps in one commit). These concurrent workers were assigned DECLARED-DISJOINT files, so a conflict means their declared file lists were incomplete and their edits actually overlapped. The worker(s) and the files each touched:\n" +
     groups.map(groupLine).join("\n") + "\n\n" +
     "Do this from the main working tree (not a worktree):\n" +
     "0. BEFORE anything else, capture the pre-merge HEAD as the squash base: run `git rev-parse HEAD` and RECORD the literal sha it prints (call it START). Do not rely on a shell variable persisting between commands — note the actual sha; you reset onto it verbatim if the wave passes. START, not any passed-in base ref, is the squash base. Then run `git status`; if a merge or rebase is already in progress or the tree is dirty, abort/reconcile it (`git merge --abort` / `git rebase --abort`) before starting; if you cannot make it clean, STOP and report a BLOCKER.\n" +
@@ -601,7 +604,7 @@ const greenBlock = !useWorktrees
       (validSha(START)
         ? "FIRST collapse the whole wave into ONE commit — `git reset --soft " + START + "` (the squash base named in Part A step 0, used VERBATIM), then a single `git commit -m \"<concise one-line summary of the wave's work>\"` (no attribution trailer; compose the summary from every step's titles/intent); set `squashed` true and `summary` to that message. Edge case: if the soft reset stages nothing (`git commit` fails with \"nothing to commit\"), do NOT force a commit — set `squashed` false and `summary` 'none'. "
         : "do NOT squash — no usable squash base exists; set `squashed` false and `summary` 'none'. ") +
-      "THEN clean up ALL of the wave's worktrees (every stage): remove each (`git worktree remove <path>`) and FORCE-delete its branch with `git branch -D <branch>` — the branches are: " + allBranches + ". A squash rewrote history so a branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tips and no work is lost. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
+      "THEN clean up ALL of the wave's worktrees (every stage, all listed above): remove each (`git worktree remove <path>`) and FORCE-delete ITS OWN branch with `git branch -D <branch>` — use the branch names from the worktree list in Part A step 1 (`git worktree list`), never a worker's label. A squash rewrote history so a branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tips and no work is lost. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
       "- NOT GREEN (any step `needs-changes`/`fail`, or a merge fault): do NOT squash — LEAVE the commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
 const greenBarLine = GREEN_BAR
   ? "GREEN additionally requires the project green bar: run " + GREEN_BAR + " and quote the decisive line; any failure means NOT GREEN.\n"
@@ -640,7 +643,7 @@ if (useWorktrees) {
   // Never leave integration null: the wave could not be confirmed merged. A non-'none'
   // conflict here trips the coordinator's stop-on-conflict path via `conflicted`.
   // merged is a floor, not a fact: a crashed verifier may have merged more branches before dying, so this understates the true count. `failed:true` — not the conflict string — is the authoritative crash signal; downstream should key on `failed`, not a conflict-string match.
-  if (!integration) integration = { merged: mergedSoFar, conflict: "verifier returned no result — the wave could not be confirmed merged", failed: true }
+  if (!integration) integration = { merged: mergedSoFar, conflict: "verifier returned no result — the wave could not be confirmed merged", resolved: "none", squashed: false, failed: true }
   log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" +
       (integration.resolved && integration.resolved !== "none" ? ", RESOLVED conflicts in: " + integration.resolved : "") +
       (integration.squashed ? ", squashed to 1 commit" + (integration.summary ? ": \"" + integration.summary + "\"" : "") : "") +
