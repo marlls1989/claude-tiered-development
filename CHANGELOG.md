@@ -5,6 +5,13 @@ All notable changes to the **tiered-development** plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-07-08
+
+### Changed
+- **Composer-declared batches of parallel jobs.** The execute-wave composer now declares an ORDERED list of batches; the jobs inside a batch run in parallel and each job is one worker running one or more tasks sequentially in its own worktree. A dumb scheduler executes exactly that declaration — no dependency evaluation, no derived DAG, and file overlap no longer serialises parallel jobs: the batch integrator resolves any same-file conflict against the tasks stated intent. A step dependsOn is now advisory input the composer may override (the in-wave dependency-cycle refusal is removed), and a structurally invalid composer declaration (a task missing or duplicated) refuses the wave with a clear error.
+- **Task-relevant aspect coverage.** The design-panel composer now also picks, for any multi-member panel (including a coordinator-fixed one), which aspects matter most for THIS task and in what order; assignment falls back to the fixed vocabulary order and never duplicates an aspect.
+- **Code-enforced wave invariants.** design-panel tags steps with an internal role (deliverable/verify), folds a verify/format-only wave into its neighbouring deliverable wave (refusing a plan with no deliverable work at all), and appends a QUESTION to the design risks when the plan comes back without a greenBar.
+
 ## [0.6.1] - 2026-07-08
 
 ### Changed

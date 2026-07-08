@@ -153,14 +153,12 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
   three-tier `complexity` (`menial`→Haiku / `mechanical`→Sonnet / `substantive`→Opus).
   **Leave a step's `complexity` blank to let the composer pick its tier**; a
   *garbage* value is refused loudly (fix it), but absence just means "you decide".
-  The mandatory Sonnet composer **owns dispatch**: it groups steps into workers, and
-  using each step's `dependsOn` the workflow runs independent workers in parallel and
-  dependent workers in staged sequence — coupled steps are either **merged** into one
-  worker (done in dependency order) or **chained** across stages, each later stage's
-  workers cut fresh and reset onto the integrated tip of the stages before it, so
-  chained workers build on their prerequisites' committed result. An explicit
-  `complexity` is still a **floor**, never downgraded, and the composer may merge or
-  chain coupled substantive steps at its discretion.
+  The mandatory Sonnet composer **owns dispatch**: it declares an ORDERED list of
+  **batches** of **parallel jobs** — each job one worker doing one or more steps
+  sequentially in one worktree; jobs in a batch run in parallel **even when they share
+  a file** (the integrator reconciles), and batches run in sequence, each dispatched
+  onto the prior batch's integrated tip. A step's `dependsOn` is **advisory** input the
+  composer may override; an explicit `complexity` is still a **floor**, never downgraded.
 - `isGit` is your first probe result; `totalSteps` is the whole plan's step count
   (for nicer labels).
 - `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's
@@ -172,11 +170,12 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
 - `greenBar` is the project's green-bar command(s) from design-panel (or the user's
   gate answer); the wave's squash is gated on it.
 
-The mandatory Sonnet composer owns dispatch: it groups the wave's steps into
-**worker assignments** and tiers each; each assignment runs **in its own git
-worktree** (substantive → Opus `tiered-development:builder`, mechanical/menial →
-Sonnet/Haiku `tiered-development:implementer`) — independent workers concurrently,
-dependent ones staged as above. Then a **single** Sonnet
+The mandatory Sonnet composer owns dispatch: it declares an ordered list of
+**batches** of **parallel jobs** — each job one worker doing one or more steps
+sequentially **in its own git worktree** (substantive → Opus
+`tiered-development:builder`, mechanical/menial → Sonnet/Haiku
+`tiered-development:implementer`); jobs in a batch run in parallel, and each
+batch is dispatched onto the prior batch's integrated tip. Then a **single** Sonnet
 `tiered-development:verifier` merges the wave's branches back into your working tree
 — resolving any conflict in place — checks all the wave's steps against the
 integrated tree (one integrator/verifier, not one per step, so it also catches
@@ -184,7 +183,7 @@ interactions between them, and it diffs against the kept worktrees to pinpoint
 merge-caused faults), and on a **green** wave squashes it into a **single summary
 commit**, where green = every step passes AND the project's `greenBar` passes; a
 failed wave keeps its per-step commits and worktrees for you to inspect. Worktrees
-are used for **every** worker assignment in a git repo — even a single sequential
+are used for **every** job in a git repo — even a single sequential
 one — so the workers' in-progress, transiently-broken edits never reach your tree
 and never flood your language server with false diagnostics. Outside git it falls
 back to sequential edits in the shared tree.
@@ -214,7 +213,7 @@ this is why you call it per wave rather than handing over the whole plan:**
   conflict *was* auto-resolved — the verifier scrutinises those, but they don't stop
   the wave.) On a green wave `integration.squashed` is set and `integration.summary`
   holds the one-line message of the single commit the wave was collapsed into. A
-  multi-stage wave that aborts mid-stage leaves the earlier stages' integrated
+  multi-batch wave that aborts mid-batch leaves the earlier batches' integrated
   commits on your working branch un-squashed — `integration.conflict`/`failed` flags
   it; inspect before continuing.
 - If a step you routed to Sonnet turns out to need judgement, re-route it to a
@@ -294,9 +293,8 @@ working tree, for two reasons:
   transiently-broken edits — so you are **not flooded with LSP diagnostics** while
   work is underway. This holds even for a single sequential step, which is why
   worktrees are used whenever the repo is git, not only for parallel waves.
-- **Parallelism.** Independent workers run concurrently; dependent workers run in
-  later stages, each reset onto the integrated tip of the prior stages (`baseRef`
-  still seeds stage 1).
+- **Parallelism.** Independent workers run concurrently; jobs in later batches are
+  reset onto the integrated tip of the prior batch (`baseRef` still seeds batch 1).
 
 One caveat the harness imposes: an isolation worktree is cut from the repo's
 **default branch**, not your checked-out branch. That is why step 4 passes `baseRef`
