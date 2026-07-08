@@ -5,6 +5,18 @@ All notable changes to the **tiered-development** plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-08
+
+### Changed
+- **execute-wave composer now biases toward few workers.** Sequential dependents that do not build on a prior parallel fan-out are merged into one worker (mixing tiers; a job's tier is the max of its tasks' floors), rather than defaulting to more, smaller jobs. A later batch is started only to build on a prior batch's integrated parallel fan-out of two-plus jobs.
+- **Difficulty-driven panel integrator.** The design/review panel integrator selection now defaults to Opus and escalates to Fable only when a panellist reports high `integrationDifficulty`, replacing the old default of Fable-if-a-top-tier-panellist-is-present. The composer now sizes the panel only — it no longer suggests the integrator.
+- **review-panel return contract.** `problems` changed from a string to an array of `{ point, confidence? }`; the verbatim QUESTION/BLOCKER ask-back text moved out of `problems` into a new `blocker` field.
+
+### Added
+- **Sonnet as an admissible design/review panel model** — explicitly selectable and auto-assignable by the composer to lighter lenses/aspects. The integrator may be pinned to Sonnet explicitly but is never auto-defaulted below Opus.
+- **Stuck-integrator escalation ladder** (sonnet → opus → fable): a reasoned stuck integrator verdict (never a crash) re-runs the merge on a more capable model, feeding the prior stuck reason forward.
+- **Per-item confidence rating** (`low` | `medium` | `high`) on each design plan step and each review point.
+
 ## [0.6.3] - 2026-07-08
 
 ### Fixed

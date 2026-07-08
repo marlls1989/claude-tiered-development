@@ -1,7 +1,7 @@
 {
   "name": "tiered-development",
   "description": "Multi-tier model delegation for Claude Code: the Opus coordinator brainstorms a rough plan with you, then chooses the model tier for each slice (or a Sonnet composer picks) — Opus/Fable architects refine and review, Opus builders write substantive code, Sonnet handles mechanical edits/research/verification, and Haiku the menial work. Fable is the premium tier, spent sparingly. A fresh agent per task, each with a clean context. Ships six agents, a gated coordination skill, and three helper workflows (design-panel, execute-wave, review-panel).",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "author": {
     "name": "msartori",
     "email": "business@msartori.uk"
