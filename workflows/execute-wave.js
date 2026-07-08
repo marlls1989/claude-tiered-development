@@ -121,8 +121,24 @@ const useWorktrees = IS_GIT
 // so `agentType` must carry the prefix — the bare name is not found.
 const NS = "tiered-development:"
 
+// ─── Resilient agent call ───
+// A schema-carrying agent() THROWS when the worker never produces valid StructuredOutput
+// ('StructuredOutput retry cap (5) exceeded'). That must degrade to a wave-level failure in
+// the returned shape, never crash the whole Workflow. Returns the agent's result, or null
+// after recording the crash reason in agentCrash. agentCrash is reset per call and is safe
+// only because every safeAgent call is individually awaited — never use it inside parallel().
+let agentCrash = null
+const safeAgent = async (prompt, opts) => {
+  agentCrash = null
+  try { return await agent(prompt, opts) } catch (e) {
+    agentCrash = e && e.message ? String(e.message) : String(e)
+    log("wave " + WAVE + " " + (opts && opts.label ? opts.label : "agent") + " CRASHED: " + agentCrash)
+    return null
+  }
+}
+
 // ─── Fragments ───
-const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Cut filler/hedging/praise; no restating this prompt. path:line on every code claim; quote only the shortest decisive line of any command output. Keep verbatim: error strings, commands, identifiers, verdict keywords (pass/needs-changes/fail), and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
+const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Cut filler/hedging/praise; no restating this prompt. path:line on every code claim; quote only the shortest decisive line of any command output. Keep verbatim: error strings, commands, identifiers, verdict keywords (pass/needs-changes/fail/blocked), and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
 const SELECTION_PRINCIPLE = `Pick the cheapest tier that will reliably get the step right, weighing the judgement it needs against the cost of getting it wrong (subtle, hard-to-catch, or wide blast radius). menial = a cheap edit that is obvious if wrong (rename, typo, boilerplate). mechanical = routine work with settled instructions. substantive = needs implementation judgement, or a silent error would be expensive. Err upward when a mistake would be costly.`
 
 // ─── Schemas ───
@@ -168,9 +184,9 @@ const WAVE_SCHEMA = {
         type: "object", required: ["idx", "verdict"],
         properties: {
           idx: { type: "integer", description: "the step's idx, exactly as given" },
-          verdict: { enum: ["pass", "needs-changes", "fail"] },
+          verdict: { enum: ["pass", "needs-changes", "fail", "blocked"] },
           evidence: { type: "string" },
-          problems: { type: "string", description: "concrete problems, most important first, or 'none'" },
+          problems: { type: "string", description: "concrete problems, most important first, or 'none'; for a 'blocked' verdict, the verbatim QUESTION/BLOCKER text — what was checked and exactly what could not be determined" },
         },
       },
     },
@@ -245,7 +261,7 @@ if (!needCompose) {
   jobs = [Object.assign(makeJob([steps[0]], floorOf(steps[0])), { batch: 1 })]
 } else {
   phase("Compose")
-  const picked = await agent(
+  const picked = await safeAgent(
     "## Batch the " + steps.length + " task(s) of wave " + WAVE + "\n" +
     "Part of a larger task: " + TASK + "\n\n" +
     "Group this wave's tasks into an ORDERED list of BATCHES. Batches run in SEQUENCE, each dispatched onto the integrated result of the one before; the jobs inside a batch run in PARALLEL. Each job is ONE worker in ONE git worktree doing one or more tasks sequentially, in the order you list them. You are only PLANNING the dispatch; you do not implement anything.\n\n" +
@@ -264,6 +280,7 @@ if (!needCompose) {
     ).join("\n\n") + "\n\n" + COMMS,
     { label: "compose:w" + WAVE, phase: "Compose", model: "sonnet", schema: BATCHES_SCHEMA }
   )
+  if (picked === null && agentCrash) return { error: "execute-wave: composer crashed (" + agentCrash + ") — no batches declared; re-invoke to retry the wave." }
   const built = buildBatches(picked)
   if (built.error) return { error: built.error }
   jobs = built.jobs
@@ -381,13 +398,13 @@ for (let batch = 1; batch <= maxBatch && !abort; batch++) {
       batchEntries.map(e => e.g.label).join(", ") + "]" + (useWorktrees ? " onto " + (base || "(no base ref)") : " (shared tree)"))
   // Integrate every NON-final batch now (git only) so the next batch resets onto committed work.
   if (batch === maxBatch || !useWorktrees) continue
-  const si = await agent(batchIntegratePrompt(batch, batchEntries.map(e => e.g), jobs.filter(j => j.batch < batch)),
+  const si = await safeAgent(batchIntegratePrompt(batch, batchEntries.map(e => e.g), jobs.filter(j => j.batch < batch)),
     { label: "integrate:w" + WAVE + ":b" + batch, phase: "Implement", model: "sonnet", agentType: NS + "verifier", schema: BATCH_SCHEMA })
   if (batch === 1) START = validSha(si && si.start) ? si.start.trim() : (BASE_REF || null)
   if (si && Number.isInteger(si.merged)) mergedSoFar += si.merged
   if (si && si.resolved && si.resolved !== "none") resolvedParts.push(si.resolved)
   if (si && si.conflict && si.conflict !== "none") conflictParts.push(si.conflict)
-  if (!si) abort = { batch, reason: "batch integrator returned no result — the wave could not be confirmed merged", crash: true }
+  if (!si) abort = { batch, reason: (agentCrash ? "batch integrator crashed (" + agentCrash + ")" : "batch integrator returned no result") + " — the wave could not be confirmed merged", crash: true }
   else if (conflicted(si)) abort = { batch, reason: "unresolved conflict in " + si.conflict, files: si.conflict }
   else if (!validSha(si.tip)) abort = { batch, reason: "batch integrator returned no valid tip sha — the wave could not be confirmed merged" }
   else { TIP = si.tip.trim(); log("wave " + WAVE + " batch " + batch + " integrated: " + si.merged + " branch(es), tip " + TIP + (si.resolved && si.resolved !== "none" ? ", RESOLVED in " + si.resolved : "")) }
@@ -491,7 +508,7 @@ const greenBlock = !useWorktrees
       "AFTER verifying:\n" +
       "- GREEN (EVERY step passed AND no merge-introduced fault): FIRST collapse the whole wave into ONE commit — `git reset --soft <START>` (the sha you recorded in Part A step 0), then a single `git commit -m \"<concise one-line summary of the wave's work>\"` (no attribution trailer; compose the summary from the steps' titles/intent). THEN remove each worktree (`git worktree remove <path>`) and FORCE-delete its branch with `git branch -D <branch>` — the squash rewrote history so the branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tip and no work is lost. Set `squashed` true and `summary` to that message. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
       "  Edge case: if NO worker branch had a commit to merge (`merged` is 0, so the soft reset stages nothing and `git commit` would fail with \"nothing to commit\"), do NOT attempt the squash commit — set `squashed` false and `summary` 'none', and still remove any worktrees.\n" +
-      "- NOT GREEN (any step `needs-changes`/`fail`, or a merge fault): do NOT squash — LEAVE the per-step commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
+      "- NOT GREEN (any step `needs-changes`/`fail`/`blocked`, or a merge fault): do NOT squash — LEAVE the per-step commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
     : diffInstructions +
       "AFTER verifying:\n" +
       "- GREEN (EVERY step passed AND no merge-introduced fault): " +
@@ -499,26 +516,35 @@ const greenBlock = !useWorktrees
         ? "FIRST collapse the whole wave into ONE commit — `git reset --soft " + START + "` (the squash base named in Part A step 0, used VERBATIM), then a single `git commit -m \"<concise one-line summary of the wave's work>\"` (no attribution trailer; compose the summary from every step's titles/intent); set `squashed` true and `summary` to that message. Edge case: if the soft reset stages nothing (`git commit` fails with \"nothing to commit\"), do NOT force a commit — set `squashed` false and `summary` 'none'. "
         : "do NOT squash — no usable squash base exists; set `squashed` false and `summary` 'none'. ") +
       "THEN clean up ALL of the wave's worktrees (every batch, all listed above): remove each (`git worktree remove <path>`) and FORCE-delete ITS OWN branch with `git branch -D <branch>` — use the branch names from the worktree list in Part A step 1 (`git worktree list`), never a worker's label. A squash rewrote history so a branch tip is no longer an ancestor of HEAD and a plain `git branch -d` will refuse (\"not fully merged\"); the squash intentionally strands the tips and no work is lost. (`git reset --soft` only moves the working branch; the worktree branches are untouched, so removing the worktrees is safe.)\n" +
-      "- NOT GREEN (any step `needs-changes`/`fail`, or a merge fault): do NOT squash — LEAVE the commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
+      "- NOT GREEN (any step `needs-changes`/`fail`/`blocked`, or a merge fault): do NOT squash — LEAVE the commits AND the worktrees exactly as they are, and name the worktrees you left so the coordinator can inspect them. Set `squashed` false and `summary` 'none'.\n"
 const greenBarLine = GREEN_BAR
   ? "GREEN additionally requires the project green bar: run " + GREEN_BAR + " and quote the decisive line; any failure means NOT GREEN.\n"
   : ""
 
 phase("Integrate & verify")
-const wave = await agent(
+const wave = await safeAgent(
   "## Integrate and verify wave " + WAVE + "\n" +
   "This is part of a larger task: " + TASK + "\n\n" +
   integratePart +
   "\nAll the step(s) below are now in the current working tree. Check EACH against its STATED intent, sceptically — and look for interactions BETWEEN them that a per-file review would miss (an assumption that holds in one step but not once another lands). Prefer evidence: run the relevant build/test/lint once if cheap and quote the shortest decisive line.\n" +
   greenBlock +
   greenBarLine +
-  "Return a verdict PER STEP, keyed by the given idx.\n\n" +
+  "Return a verdict PER STEP, keyed by the given idx. If you genuinely CANNOT determine a step's outcome — you cannot tell what it INTENDED, or the evidence is inconclusive either way — give THAT step the verdict 'blocked' and put your QUESTION/BLOCKER text verbatim in its `problems` (what you checked and exactly what you could not resolve). 'blocked' is a legitimate outcome, never a fabricated pass/fail — and never answer in prose instead of the structured output. An unresolvable MERGE conflict is a different channel: it goes in the top-level `conflict` field, not a step verdict. Any 'blocked' step means the wave is NOT GREEN: do not squash, leave the worktrees.\n\n" +
   stepBlocks + "\n\n" + COMMS,
   { label: "verify:w" + WAVE, phase: "Integrate & verify", model: "sonnet", agentType: NS + "verifier", schema: WAVE_SCHEMA }
 )
 
 const verdByIdx = {}
 if (wave && Array.isArray(wave.results)) wave.results.forEach(r => { verdByIdx[r.idx] = r })
+
+// A 'blocked' verdict is the verifier's schema-legal ask-back: it could not determine the
+// step's outcome and put its QUESTION in that step's problems. The wave is NOT green — the
+// verifier was instructed not to squash — and the coordinator escalates to the user.
+const blockedIdx = steps.map(s => s.idx).filter(i => verdByIdx[i] && verdByIdx[i].verdict === "blocked")
+if (blockedIdx.length) {
+  log("wave " + WAVE + " BLOCKED on step idx " + blockedIdx.join(", ") + " — verifier could not determine the outcome; its QUESTION is in each step's problems; worktrees kept, no squash")
+  if (wave && wave.squashed) log("wave " + WAVE + " WARNING: verifier reported squashed:true despite a blocked step — inspect before continuing")
+}
 
 let integration = null
 if (useWorktrees) {
@@ -537,12 +563,16 @@ if (useWorktrees) {
   // Never leave integration null: the wave could not be confirmed merged. A non-'none'
   // conflict here trips the coordinator's stop-on-conflict path via `conflicted`.
   // merged is a floor, not a fact: a crashed verifier may have merged more branches before dying, so this understates the true count. `failed:true` — not the conflict string — is the authoritative crash signal; downstream should key on `failed`, not a conflict-string match.
-  if (!integration) integration = { merged: mergedSoFar, conflict: "verifier returned no result — the wave could not be confirmed merged", resolved: "none", squashed: false, failed: true }
+  if (!integration) integration = { merged: mergedSoFar, conflict: (agentCrash ? "verifier crashed (" + agentCrash + ")" : "verifier returned no result") + " — the wave could not be confirmed merged", resolved: "none", squashed: false, failed: true }
   log("wave " + WAVE + " integrated: " + integration.merged + " branch(es) merged" +
       (integration.resolved && integration.resolved !== "none" ? ", RESOLVED conflicts in: " + integration.resolved : "") +
       (integration.squashed ? ", squashed to 1 commit" + (integration.summary ? ": \"" + integration.summary + "\"" : "") : "") +
       (conflicted(integration) ? ", UNRESOLVED CONFLICT: " + integration.conflict : ""))
 }
+
+// Non-git: a crashed/empty verifier must still surface as a wave-level failure rather than
+// integration: null — failed:true is the authoritative crash signal here too.
+if (!useWorktrees && !wave) integration = { merged: 0, conflict: (agentCrash ? "verifier crashed (" + agentCrash + ")" : "verifier returned no result") + " — the wave could not be confirmed verified", resolved: "none", squashed: false, failed: true }
 
 const conflict = useWorktrees && conflicted(integration) ? integration.conflict : undefined
 const results = steps.map(s => {

@@ -38,8 +38,24 @@ if (integSpecified && !MODEL_SET.includes(integratorModel)) {
 // Agent types are namespaced; agentType must carry the prefix.
 const NS = "tiered-development:"
 
+// ─── Resilient agent call ───
+// A schema-carrying agent() THROWS when the worker never produces valid StructuredOutput
+// ('StructuredOutput retry cap (5) exceeded'). That must degrade to a review-level failure in
+// the returned shape, never crash the whole Workflow. Returns the agent's result, or null
+// after recording the crash reason in agentCrash. agentCrash is reset per call and is safe
+// only because every safeAgent call is individually awaited — never use it inside parallel().
+let agentCrash = null
+const safeAgent = async (prompt, opts) => {
+  agentCrash = null
+  try { return await agent(prompt, opts) } catch (e) {
+    agentCrash = e && e.message ? String(e.message) : String(e)
+    log((opts && opts.label ? opts.label : "agent") + " CRASHED: " + agentCrash)
+    return null
+  }
+}
+
 // ─── Shared prompt fragments ───
-const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Return only the structured output — no preamble, no restating this prompt. Cut filler/hedging/praise. path:line on every code claim; quote the shortest decisive line of any command output. Keep verbatim: error strings, commands, identifiers, the verdict keywords (pass/needs-changes/fail), and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
+const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Return only the structured output — no preamble, no restating this prompt. Cut filler/hedging/praise. path:line on every code claim; quote the shortest decisive line of any command output. Keep verbatim: error strings, commands, identifiers, the verdict keywords (pass/needs-changes/fail/blocked), and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
 const LENSES = ["subtle correctness & logic", "architectural coherence & cross-module interactions", "security, error paths, resource handling & partial failure", "tests & coverage", "scope, simplicity & YAGNI"]
 const contextBlock =
   "Task: " + TASK + "\n\n" +
@@ -51,9 +67,9 @@ const contextBlock =
 const REVIEW_SCHEMA = {
   type: "object", required: ["verdict", "evidence"],
   properties: {
-    verdict: { enum: ["pass", "needs-changes", "fail"] },
+    verdict: { enum: ["pass", "needs-changes", "fail", "blocked"] },
     evidence: { type: "string", description: "what you ran or read and what it showed (path:line, command output)" },
-    problems: { type: "string", description: "concrete problems, most important first, or 'none'" },
+    problems: { type: "string", description: "concrete problems, most important first, or 'none'; for a 'blocked' verdict, the verbatim QUESTION/BLOCKER text — what was checked and exactly what could not be determined" },
   },
 }
 const COMPOSE_SCHEMA = {
@@ -69,13 +85,15 @@ const reviewPrompt = lens =>
   "## Review this completed change against its intent\n" + contextBlock +
   (lens ? "Focus your review through this lens: **" + lens + "** (but flag anything serious you notice outside it).\n\n" : "") +
   "Review against the STATED intent, not just what the diff happens to do. A change that builds and passes per-step checks but does the wrong thing, or the right thing in a way that breaks something else, is a failure. Prefer evidence — run the relevant tests/build/lint if the repo supports it and quoting the output is cheap; never suppress output through tail/head/grep. Cite path:line for every concrete claim.\n\n" +
-  "Return: VERDICT (pass/needs-changes/fail), the evidence, and each concrete problem (most important first) or 'none'.\n\n" + COMMS
+  "Return: VERDICT (pass/needs-changes/fail/blocked — use blocked ONLY when you genuinely cannot determine the verdict: unclear intent or genuinely inconclusive evidence; put your QUESTION/BLOCKER text verbatim in problems), the evidence, and each concrete problem (most important first) or 'none'. Your final output is the mandatory StructuredOutput call — never answer in prose in its place.\n\n" + COMMS
 
 // ─── Compose: pick the reviewer composition when the coordinator did not ───
 let compositionRationale = ""
 if (!panelSpecified) {
   phase("Compose")
-  const picked = await agent(
+  // safeAgent (not agent): a composer crash degrades to null — no early return needed, the
+  // null-guards below + the static fallback already recover a null composer (unlike execute-wave).
+  const picked = await safeAgent(
     "## Choose the reviewer composition for this final review\n" + contextBlock +
     "Decide who should review this change. Return `reviewModels` — 1–5 entries of 'opus'/'fable', one reviewer each — and optionally `integratorModel` ('opus'/'fable') for the step that merges >1 verdict into the final one.\n\n" +
     "Guidance: Opus is the default and reviews most changes well. Fable is stronger but bills extra — reach for it (a Fable reviewer and/or a Fable integrator) only for HIGH-COMPLEXITY or HIGH-IMPACT changes: deep analysis of a large/existing codebase, hunting subtle long-standing bugs, or tracing the blast radius of a decision. A single ['opus'] suits a routine change; a 2–3 panel puts each reviewer on a different lens. If you put Fable on the panel, set `integratorModel` to 'fable' too so the final verdict is merged by an equal (the integrator defaults to the top tier in the panel). The integrator is ≥Opus, NEVER Sonnet.\n\n" +
@@ -97,10 +115,14 @@ log("Composition: panel=[" + reviewModels.join(",") + "] integrator=" + integrat
 phase("Review")
 const multi = reviewModels.length > 1
 const lensesUsed = reviewModels.map((m, i) => multi ? LENSES[i % LENSES.length] : null)
+// Fan-out uses a per-thunk try/catch (NOT safeAgent — agentCrash is shared module state,
+// unsafe under parallel()); the `if (r)` filter below drops a crashed reviewer, and
+// `candidates.length === 0` fails only if ALL reviewers crash.
 const raw = await parallel(
-  reviewModels.map((m, i) => () =>
-    agent(reviewPrompt(lensesUsed[i]), { label: "review:" + (i + 1), phase: "Review", model: m, effort: "high", agentType: NS + "deep-reviewer", schema: REVIEW_SCHEMA })
-  )
+  reviewModels.map((m, i) => async () => {
+    try { return await agent(reviewPrompt(lensesUsed[i]), { label: "review:" + (i + 1), phase: "Review", model: m, effort: "high", agentType: NS + "deep-reviewer", schema: REVIEW_SCHEMA }) }
+    catch (e) { log("review:" + (i + 1) + " CRASHED: " + (e && e.message ? String(e.message) : String(e))); return null }
+  })
 )
 const candidates = []
 raw.forEach((r, i) => { if (r) { r._lens = lensesUsed[i]; candidates.push(r) } })
@@ -116,9 +138,10 @@ if (candidates.length > 1) {
   const block = candidates.map((c, i) =>
     "### Reviewer [" + i + "] (" + (c._lens || "whole-change") + ")\nVerdict: " + c.verdict + "\nEvidence: " + (c.evidence || "") + "\nProblems: " + (c.problems || "none")
   ).join("\n\n")
-  review = await agent(
+  review = await safeAgent(
     "## Integrate the panel into ONE final verdict\n" + contextBlock +
-    "You have " + candidates.length + " independent review(s) of this change. The panel has ALREADY reviewed it — TRUST their findings and do NOT re-review the change from scratch. Merge them into ONE verdict: the overall verdict is the MOST SEVERE present — `fail` beats `needs-changes` beats `pass`. Consolidate and de-duplicate the problems, keeping the most important first. Adjudicate ONLY where reviewers DISAGREE — one makes a claim another refutes; drop any claim a later reviewer convincingly refuted. When adjudicating such a DISPUTED claim you may verify that specific claim yourself if it is cheap — this is not a licence for blanket re-verification.\n\n" + block + "\n\n" +
+    "You have " + candidates.length + " independent review(s) of this change. The panel has ALREADY reviewed it — TRUST their findings and do NOT re-review the change from scratch. Merge them into ONE verdict: the overall verdict is the MOST SEVERE present — `fail` beats `needs-changes` beats `pass`. Consolidate and de-duplicate the problems, keeping the most important first. Adjudicate ONLY where reviewers DISAGREE — one makes a claim another refutes; drop any claim a later reviewer convincingly refuted. When adjudicating such a DISPUTED claim you may verify that specific claim yourself if it is cheap — this is not a licence for blanket re-verification.\n\n" +
+    "A reviewer 'blocked' means it genuinely COULD NOT determine the verdict — its QUESTION is in that reviewer's problems; RESOLVE it yourself from the candidates/cheap verification under the adjudication licence above where you can, and give the merged verdict 'blocked' ONLY when it stays genuinely unresolved, carrying the open QUESTION verbatim (plus any fail/needs-changes findings) in problems, most important first. 'blocked' (cannot determine) is DISTINCT from 'fail' (a definite defect) — never collapse one into the other. If YOU cannot merge into a determinate verdict, return 'blocked' with your QUESTION in problems, through the mandatory StructuredOutput — never answer in prose.\n\n" + block + "\n\n" +
     "Return the final VERDICT, the merged evidence, and the consolidated problems (or 'none').\n\n" + COMMS,
     { label: "integrate", phase: "Integrate", model: integratorModel, effort: "max", agentType: NS + "deep-reviewer", schema: REVIEW_SCHEMA }
   )
@@ -127,7 +150,7 @@ if (candidates.length > 1) {
 }
 
 if (!review || !review.verdict) {
-  return { error: "Review failed to produce a verdict.", candidates: candidates.map(({ _lens, ...rest }) => rest) }
+  return { error: "Review failed to produce a verdict." + (agentCrash ? " (integrator crashed: " + agentCrash + ")" : ""), candidates: candidates.map(({ _lens, ...rest }) => rest) }
 }
 log("Review verdict: " + review.verdict)
 

@@ -5,6 +5,14 @@ All notable changes to the **tiered-development** plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-07-08
+
+### Fixed
+- **Schema-legal ask-back for the final wave verifier.** The verifier's per-step verdict enum gains `blocked`: when it genuinely cannot determine a step's outcome it returns `blocked` with its QUESTION/BLOCKER verbatim in that step's `problems`, instead of answering in prose — which the mandatory StructuredOutput call rejected, exhausting the retry cap and crashing the whole wave. A `blocked` step means the wave is not green: no squash, worktrees kept, and the coordinator escalates to the user rather than auto-fixing.
+- **Crash-resilient schema calls.** The composer, per-batch integrator, and final verifier agent calls are wrapped in a shared `safeAgent` helper so a StructuredOutput retry-cap crash (or a null return) degrades to a coherent wave-level failure in the returned `{ wave, results, integration }` — `failed: true` with the crash reason quoted — instead of an uncaught error killing the Workflow.
+- **Schema-legal ask-back and crash-resilience for review-panel.** The REVIEW_SCHEMA verdict enum gains `blocked`: when a reviewer or integrator encounters a genuine conflict or ambiguity, it returns `blocked` with the QUESTION/BLOCKER verbatim in `problems` instead of answering in prose — which would cause the mandatory StructuredOutput call to reject and crash. The panel's sequential composer and integrator calls are wrapped in `safeAgent`, and the parallel reviewer fan-out uses per-thunk try/catch isolation; a retry-cap crash degrades to the existing no-verdict `{ error }` return (dropped reviewer; fails only if all crash) instead of killing the workflow.
+- **Schema-legal ask-back and crash-resilience for design-panel.** The panel's composer and plan integrator are wrapped in `safeAgent`, and the parallel refiner fan-out isolates a crashed architect to a dropped candidate — so a retry-cap crash degrades to the existing `{ error }` return. Additionally, PLAN_SCHEMA now carries an optional `blocker` field: when the architect returns a blocker (empty `steps` and contradictory or wrong-premise reason), it travels inside StructuredOutput and surfaces as `{ error }` instead of a prose BLOCKER reply that would crash.
+
 ## [0.6.2] - 2026-07-08
 
 ### Changed

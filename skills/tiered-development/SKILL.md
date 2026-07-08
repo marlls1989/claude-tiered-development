@@ -127,7 +127,12 @@ dependency made explicit in `dependsOn`. If `design.risks` carries a QUESTION ab
 the project's green bar (`greenBar` empty), resolve it with the user at the step-3
 gate and supply the answer as `execute-wave`'s `greenBar`. If it returns a `BLOCKER`
 instead (the rough plan was contradictory or its premise is wrong), resolve it with
-the user before proceeding.
+the user before proceeding — this includes a crash-degraded `{ error }`: a
+StructuredOutput retry-cap crash in the composer or plan integrator now degrades to
+this same `{ error }` return (the crash reason quoted) rather than killing the
+Workflow, mirroring the execute-wave crash guidance above; do not treat it as a
+pass. A genuine architect BLOCKER now travels through the plan schema's `blocker`
+field and likewise surfaces as `{ error }`.
 
 ### 3. GATE — the user approves
 
@@ -196,6 +201,14 @@ this is why you call it per wave rather than handing over the whole plan:**
   should verify/confirm" notes from their `Report:` returns — not just the
   pass/fail verdicts. Carry them forward; they feed the final review (step 5).
 - If a step returns a `BLOCKER` or a question, apply the **## Escalation rule** below.
+- If the wave verifier returns `blocked` on a step, it could not determine that
+  step's outcome — its QUESTION/BLOCKER is in that step's `problems`. Treat it
+  like a `BLOCKER`: the wave was not squashed and its worktrees/per-step commits
+  are kept; do **not** spin an auto fix-up for a `blocked` step — answer the
+  question yourself only if you genuinely hold the context, otherwise escalate
+  to the user (## Escalation rule), and only continue once it is resolved.
+  Scanning the wave's `results` for verdict `blocked` is the authoritative
+  signal (robust for the non-git path, where `integration` is null).
 - If the wave verifier returns `fail` or `needs-changes` on a step (it ran cleanly
   but the result is wrong — not a `BLOCKER`), do **not** advance the wave. Spin a
   targeted fix-up: re-dispatch that one step as its own single-step wave via
@@ -206,8 +219,11 @@ this is why you call it per wave rather than handing over the whole plan:**
   and inspect. The integrator/verifier resolves conflicts in place, so a surfaced
   `conflict` is one it could **not** safely resolve — the wave's steps overlapped in
   a genuinely ambiguous way; re-plan that boundary. `failed` means it returned no
-  result and could not confirm the merge (a crash, distinct from an ambiguous
-  conflict) — inspect the tree before continuing. On a `fail`/`needs-changes` wave
+  result and could not confirm the merge — either it returned nothing or it
+  crashed outright (e.g. the agent never produced valid structured output and
+  hit the retry cap; the workflow degrades that to this wave-level failure
+  instead of crashing, quoting the reason in `integration.conflict`) — inspect
+  the tree before continuing. On a `fail`/`needs-changes` wave
   the worktrees are left in place on purpose, for you to inspect the original
   branches while spinning the fix-up. (`integration.resolved` lists files where a
   conflict *was* auto-resolved — the verifier scrutinises those, but they don't stop
@@ -243,16 +259,29 @@ having to rediscover them. Two ways, scale to the change:
   verdict (most severe wins). The two-tier pattern (`reviewModels:["opus","opus"],
   integratorModel:"fable"`) puts Fable on the *final* verdict only. Prefer omitting
   both — the Sonnet composer then picks; set them explicitly only when the user asks
-  for a specific panel or integrator. Returns `{ review: { verdict, evidence, problems } }`.
+  for a specific panel or integrator. Returns `{ review: { verdict, evidence, problems } }`
+  — `verdict` now also has a `blocked` value, and the panel can instead degrade to
+  the `{ error }` return described below.
 - **Light** — a single `tiered-development:deep-reviewer` inline via the `Agent` tool
   (pick `model: opus`, or `fable` if it warrants the cost). No fan-out, no workflow.
 
-**If the verdict is not `pass`, do not proceed to step 6.** If you are in doubt
-about any finding — it may be a false positive, or rest on harness/project context
-the reviewer lacked — surface the findings to the user and let them adjudicate which
-to fix *before* dispatching any fix-up; do not autonomously loop back on uncertain
-findings, since a review can be wrong and the user often holds context the reviewer
-does not. Otherwise loop back: spin a targeted fix-up wave for the flagged steps
+**If the verdict is not `pass`, do not proceed to step 6.** A verdict of `blocked`
+means the panel (a reviewer or the integrator) genuinely could not determine the
+verdict — its QUESTION/BLOCKER is in `review.problems` (or a candidate's
+`problems`); treat it like a `BLOCKER`: surface it to the user and do **not**
+autonomously loop a fix-up (apply the ## Escalation rule below), answering it
+yourself only if you genuinely hold the context, and continue only once resolved.
+Separately, if the review-panel integrator **crashes** (a StructuredOutput
+retry-cap or a null return), the workflow degrades that to the existing
+`{ error }` return (not a verdict), quoting the crash reason — a crashed
+reviewer is simply **dropped** from the panel (the review fails only if *all*
+reviewers crash); on an `{ error }` return, inspect and re-invoke rather than
+treating it as a pass. If you are in doubt about any finding — it may be a false
+positive, or rest on harness/project context the reviewer lacked — surface the
+findings to the user and let them adjudicate which to fix *before* dispatching any
+fix-up; do not autonomously loop back on uncertain findings, since a review can be
+wrong and the user often holds context the reviewer does not. Otherwise loop back:
+spin a targeted fix-up wave for the flagged steps
 (via `tiered-development:execute-wave`, escalating tier as needed), or re-plan via
 `tiered-development:design-panel` if the design itself is wrong — then re-review. If
 you loop back by re-planning via design-panel (rather than just a fix-up wave),

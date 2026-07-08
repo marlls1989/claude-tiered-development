@@ -41,6 +41,22 @@ if (integSpecified && !MODEL_SET.includes(integratorModel)) {
 // so `agentType` must carry the prefix — the bare name is not found.
 const NS = "tiered-development:"
 
+// ─── Resilient agent call ───
+// A schema-carrying agent() THROWS when the worker never produces valid StructuredOutput
+// ('StructuredOutput retry cap (5) exceeded'). That must degrade to a design-level failure in
+// the returned shape, never crash the whole Workflow. Returns the agent's result, or null
+// after recording the crash reason in agentCrash. agentCrash is reset per call and is safe
+// only because every safeAgent call is individually awaited — never use it inside parallel().
+let agentCrash = null
+const safeAgent = async (prompt, opts) => {
+  agentCrash = null
+  try { return await agent(prompt, opts) } catch (e) {
+    agentCrash = e && e.message ? String(e.message) : String(e)
+    log((opts && opts.label ? opts.label : "agent") + " CRASHED: " + agentCrash)
+    return null
+  }
+}
+
 // ─── Shared prompt fragments ───
 const GROUNDING = `Explore the repository first — read enough of the relevant code and config to ground your work in what actually exists, and reuse existing utilities/patterns rather than inventing parallel ones. Cite path:line for load-bearing claims. Follow repo conventions, including British spelling in identifiers/output where the repo uses it. Apply YAGNI — no speculative scope.`
 const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Return only the structured output — no preamble, no restating this prompt. Cut filler/hedging/praise. path:line on every code claim. Keep verbatim: error strings, commands, identifiers, and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
@@ -71,6 +87,7 @@ const PLAN_SCHEMA = {
     rationale: { type: "string", description: "why this approach; what is deliberately out of scope" },
     risks: { type: "string", description: "main risks or open questions, or 'none'" },
     greenBar: { type: "string", description: "the concrete build/test/lint command(s), from the PROJECT'S OWN rules, that define a green tree — every wave must end green by this bar; leave empty and raise a QUESTION in `risks` if the project's green criteria are unclear" },
+    blocker: { type: "string", description: "set ONLY to raise an ask-back: the rough plan is internally contradictory, under-specified, or its premise is wrong given the code. Put the verbatim BLOCKER/QUESTION text (what is contradictory/wrong and the choices you see) here and return an EMPTY `steps` array; leave unset when producing a plan. A schema-legal channel — prose in place of this crashes the workflow." },
     steps: {
       type: "array",
       description: "steps grouped into ascending waves; a wave is a COMPLETE, GREEN, DELIVERABLE slice — a milestone leaving the tree green per the project's own rules; same-wave steps MAY be dependent and MAY share files, but every same-wave dependency MUST be declared in dependsOn; later waves build on earlier waves' integrated result.",
@@ -120,7 +137,7 @@ const composePrompt = fixedPanel =>
   "You are CHOOSING the composition and the ordered aspect assignment — you do not design the plan itself.\n\n" + COMMS
 if (!panelSpecified || composeForAspects) {
   phase("Compose")
-  const picked = await agent(
+  const picked = await safeAgent(
     composePrompt(composeForAspects ? panelModels : null),
     { label: "compose", phase: "Compose", model: "sonnet", schema: COMPOSE_SCHEMA }
   )
@@ -151,14 +168,21 @@ const multi = panelModels.length > 1
 const aspectsUsed = assignAspects(panelModels.length, multi ? composerAspects : null)
 if (multi) log("Aspects: " + aspectsUsed.join(" | "))
 const raw = await parallel(
-  panelModels.map((m, i) => () =>
-    agent(refinePrompt(aspectsUsed[i]), { label: "refine:" + (i + 1), phase: "Refine", model: m, effort: "high", agentType: NS + "architect", schema: PLAN_SCHEMA })
-  )
+  panelModels.map((m, i) => async () => {
+    try {
+      return await agent(refinePrompt(aspectsUsed[i]), { label: "refine:" + (i + 1), phase: "Refine", model: m, effort: "high", agentType: NS + "architect", schema: PLAN_SCHEMA })
+    } catch (e) {
+      log("refine:" + (i + 1) + " CRASHED: " + (e && e.message ? e.message : e))
+      return null
+    }
+  })
 )
 const candidates = []
 raw.forEach((r, i) => { if (r) { r._aspect = aspectsUsed[i]; candidates.push(r) } })
 log("Panel: " + candidates.length + " aspect-refined plan(s) [" + panelModels.join(",") + "]")
 if (candidates.length === 0) return { error: "Refinement produced no candidate plan." }
+const blocked = candidates.find(c => typeof c.blocker === "string" && c.blocker.trim())
+if (blocked) return { error: "design-panel BLOCKER: " + blocked.blocker.trim(), design: { recommendation: blocked.recommendation || "", rationale: blocked.rationale || "", risks: blocked.risks || "" }, plan: [] }
 
 // ─── Integrate: merge the aspect-refined plans into one coherent plan (≥Opus) ───
 // A single candidate IS the finished plan — nothing to merge, so return it directly
@@ -171,7 +195,7 @@ if (candidates.length > 1) {
     (Array.isArray(c.steps) ? c.steps : []).map((s, k) => "  " + (k + 1) + ". (wave " + s.wave + ", " + s.complexity + ")" + (s.id ? " id=" + s.id : "") + (Array.isArray(s.dependsOn) && s.dependsOn.length ? " deps=[" + s.dependsOn.join(",") + "]" : "") + " " + s.title + " — " + s.change + (s.files && s.files.length ? " [" + s.files.join(", ") + "]" : "")).join("\n")
   ).join("\n\n")
   const aspectsLine = candidates.map(c => c._aspect).filter(Boolean).join("; ")
-  refined = await agent(
+  refined = await safeAgent(
     "## Integrate the aspect-refined plans into ONE\nTask: " + TASK + roughBlock + "\n" +
     "You have " + candidates.length + " plan(s)" + (aspectsLine ? ", each refined by a specialist who OWNED one aspect (" + aspectsLine + ")" : "") + ". The panel has ALREADY deliberated and grounded their plans in the repo — TRUST that work. ADOPT each specialist's contribution on the aspect they owned as authoritative (the correctness specialist's edge-case steps, the architecture specialist's structure/reuse, the decomposition specialist's waving, the verification specialist's checks, and so on). Where members merely cover different ground, UNION their steps. MEDIATE only where two members GENUINELY conflict — they contradict each other, or one member's step would break another's — and when you mediate, prefer the aspect-owner's intent for the disputed aspect. Do NOT re-derive, re-plan, or 'improve' a member's aspect where there is no conflict — that discards the deliberation you are here to preserve. Keep it to at most " + MAX_STEPS + " steps, correctly waved (each wave a self-contained green deliverable; same-wave dependencies declared via id/dependsOn; no verify/format-only wave), each step tagged with complexity (" + TIERS_DESC + "). PRESERVE each step's id, dependsOn edges and role, tagging a closing verification/formatting/lint step with `role: 'verify'` and leaving every other step at the default 'deliverable', and emit one reconciled greenBar.\n\nThe panel already explored the repository, so you do NOT need to re-explore: read code ONLY to settle a specific conflict a candidate's citation cannot resolve. Cite path:line for load-bearing claims, follow repo conventions (including British spelling in identifiers/output where the repo uses it), and apply YAGNI — no speculative scope." + "\n\n" + block + "\n\n" + COMMS,
     { label: "integrate", phase: "Integrate", model: integratorModel, effort: "max", agentType: NS + "architect", schema: PLAN_SCHEMA }
@@ -180,9 +204,10 @@ if (candidates.length > 1) {
   refined = candidates[0]
 }
 
-if (!refined || !Array.isArray(refined.steps) || refined.steps.length === 0) {
-  return { error: "Refinement failed to produce steps.", design: refined ? { recommendation: refined.recommendation, rationale: refined.rationale, risks: refined.risks } : null, plan: [] }
-}
+// agentCrash is fresh here: refined is null ONLY on the integrator path (the single-candidate branch sets refined = candidates[0], always truthy), whose safeAgent reset agentCrash for its own call.
+if (!refined) return { error: "design-panel: refinement crashed — " + (agentCrash || "the integrator produced no valid StructuredOutput") + ". No plan produced; worktrees/commits (if any) left for manual recovery.", design: null, plan: [] }
+if (typeof refined.blocker === "string" && refined.blocker.trim()) return { error: "design-panel BLOCKER: " + refined.blocker.trim(), design: { recommendation: refined.recommendation || "", rationale: refined.rationale || "", risks: refined.risks || "" }, plan: [] }
+if (!Array.isArray(refined.steps) || refined.steps.length === 0) return { error: "Refinement failed to produce steps.", design: { recommendation: refined.recommendation, rationale: refined.rationale, risks: refined.risks }, plan: [] }
 
 // Attach a stable 1-based index; normalise wave number and complexity (three tiers).
 const TIERS = ["menial", "mechanical", "substantive"]
