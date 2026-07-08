@@ -64,7 +64,9 @@ Deliver two things:
    verify/format-only wave. State the project's green bar (the concrete commands)
    with the plan, and when the project's green criteria are NOT clear, return a
    QUESTION per the ASK BACK rule above so the coordinator asks the user at the
-   approval gate.
+   approval gate. If/when the panel schema asks for it — i.e. a multi-member
+   panel — also emit `integrationDifficulty` and `integrationDifficultyReason`
+   for the plan as a whole, and a per-step `confidence` (`low`|`medium`|`high`).
 
 YAGNI ruthlessly — no speculative features or abstractions the problem does not
 call for. Match the codebase: follow existing conventions, including British

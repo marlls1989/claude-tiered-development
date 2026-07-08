@@ -1,11 +1,11 @@
 export const meta = {
   name: "design-panel",
-  description: "Refine a rough plan (drafted with the user during brainstorming) into a numbered, wave-grouped, dispatchable implementation plan with explicit inter-step dependsOn dependencies and a project greenBar (the build/test/lint command(s) that define a green tree). By default a cheap Sonnet composer picks the architect composition; it also assigns each panelist its task-relevant aspect on a multi-member panel. The coordinator overrides via panelModels — a single Opus/Fable architect, an all-Opus/all-Fable/mixed panel, or the two-tier pattern (an Opus panel then a ≥Opus integrator, optionally Fable) — only when the user asks for a specific one. It does NOT design from a blank slate; it refines what the user and coordinator already shaped.",
-  whenToUse: "Invoked by the tiered-development skill. Pass args as an object: { level, task, roughPlan, panelModels?, integratorModel? } — level is 'quick' | 'standard' | 'deep'; panelModels is a 1–5 array of 'opus'/'fable'; integratorModel ('opus'|'fable', never Sonnet) runs the final plan integrator. Omit panelModels/integratorModel to let a Sonnet composer choose; even with a fixed multi-member panel the composer still assigns the per-panelist aspects. Returns { design, plan, waves, greenBar }.",
+  description: "Refine a rough plan (drafted with the user during brainstorming) into a numbered, wave-grouped, dispatchable implementation plan with explicit inter-step dependsOn dependencies and a project greenBar (the build/test/lint command(s) that define a green tree). By default a cheap Sonnet composer picks the architect composition (Sonnet-admissible for a lighter aspect); it also assigns each panelist its task-relevant aspect on a multi-member panel. The integrator tier is deferred until after the panel fans out — it defaults to Opus and escalates to Fable when the panel flags high integration difficulty, then climbs a Sonnet→Opus→Fable ladder if it cannot reconcile. The coordinator overrides via panelModels — a single Sonnet/Opus/Fable architect, a mixed panel, or the two-tier pattern (a panel then a named integrator) — only when the user asks for a specific one. It does NOT design from a blank slate; it refines what the user and coordinator already shaped.",
+  whenToUse: "Invoked by the tiered-development skill. Pass args as an object: { level, task, roughPlan, panelModels?, integratorModel? } — level is 'quick' | 'standard' | 'deep'; panelModels is a 1–5 array of 'opus'/'fable'/'sonnet'; integratorModel ('opus'|'fable'|'sonnet') runs the final plan integrator. Omit panelModels to let a Sonnet composer choose; omit integratorModel to defer the tier until after the panel fans out (Opus by default, Fable when the panel flags high integration difficulty). Even with a fixed multi-member panel the composer still assigns the per-panelist aspects. Returns { design, plan, waves, greenBar }.",
   phases: [
-    { title: "Compose", detail: "A Sonnet composer picks the panel models + integrator when unspecified, and — even for a fixed panel — assigns the ordered, task-relevant aspects across a multi-member panel", model: "sonnet" },
-    { title: "Refine", detail: "Architect(s) (Opus and/or Fable) refine the rough plan into a design summary + a numbered, wave-grouped plan" },
-    { title: "Integrate", detail: "When >1 candidate (or an integrator is set): a ≥Opus architect merges the panel's candidate plans into one" },
+    { title: "Compose", detail: "A Sonnet composer picks the panel models when unspecified, and — even for a fixed panel — assigns the ordered, task-relevant aspects across a multi-member panel", model: "sonnet" },
+    { title: "Refine", detail: "Architect(s) (Sonnet, Opus and/or Fable) refine the rough plan into a design summary + a numbered, wave-grouped plan" },
+    { title: "Integrate", detail: "When >1 candidate: an architect merges the panel's candidate plans into one, climbing a Sonnet→Opus→Fable escalation ladder if it cannot reconcile" },
   ],
 }
 
@@ -21,20 +21,22 @@ const ROUGH = typeof A.roughPlan === "string" ? A.roughPlan.trim() : ""
 if (!TASK) return { error: "No task given. Pass args as { level, task, roughPlan }." }
 const MAX_STEPS = LEVEL === "deep" ? 16 : LEVEL === "quick" ? 6 : 10
 
-// Design/plan-integrator models are the thinking tiers: Opus or Fable ONLY (never
-// Sonnet). Fable is the premium tier — spend it sparingly. Validate anything the
-// coordinator supplies and scream on a bad value rather than guessing.
-const MODEL_SET = ["opus", "fable"]
+// Panel/integrator models now span the tiers: Sonnet is admissible on the panel (the
+// composer may assign it a lighter aspect) and as an explicit integrator, and the
+// deferred integrator escalates Sonnet→Opus→Fable when it cannot reconcile. Fable is
+// the premium tier — spend it sparingly. Validate anything the coordinator supplies
+// and scream on a bad value rather than guessing.
+const MODEL_SET = ["opus", "fable", "sonnet"]
 const validModelList = a => Array.isArray(a) && a.length >= 1 && a.length <= 5 && a.every(m => MODEL_SET.includes(m))
 let panelModels = A.panelModels
 let integratorModel = A.integratorModel
 const panelSpecified = panelModels !== undefined && panelModels !== null
 const integSpecified = integratorModel !== undefined && integratorModel !== null && integratorModel !== ""
 if (panelSpecified && !validModelList(panelModels)) {
-  return { error: "design-panel: `panelModels` must be a non-empty array (≤5) of 'opus'/'fable', got " + JSON.stringify(A.panelModels) + "." }
+  return { error: "design-panel: `panelModels` must be a non-empty array (≤5) of 'opus'/'fable'/'sonnet', got " + JSON.stringify(A.panelModels) + "." }
 }
 if (integSpecified && !MODEL_SET.includes(integratorModel)) {
-  return { error: "design-panel: `integratorModel` (the plan integrator) must be 'opus' or 'fable' — never Sonnet — got " + JSON.stringify(A.integratorModel) + "." }
+  return { error: "design-panel: `integratorModel` (the plan integrator) must be 'opus', 'fable', or 'sonnet', got " + JSON.stringify(A.integratorModel) + "." }
 }
 
 // Agent types are registered under the plugin namespace (e.g. "tiered-development:architect"),
@@ -74,8 +76,7 @@ const ASPECTS = [
 const COMPOSE_SCHEMA = {
   type: "object", required: ["panelModels"],
   properties: {
-    panelModels: { type: "array", items: { enum: ["opus", "fable"] }, description: "1–5 models, one per architect; Opus by default, a Fable panelist only for high-complexity/high-impact work (a hard algorithm's core, deep bug-hunts, blast-radius analysis)" },
-    integratorModel: { enum: ["opus", "fable"], description: "model for the plan integrator that merges the aspect-refined plans — ≥Opus, never Sonnet; defaults to the top tier in the panel, so make it 'fable' whenever a panelist is Fable" },
+    panelModels: { type: "array", items: { enum: ["opus", "fable", "sonnet"] }, description: "1–5 models, one per architect; Opus by default, a Sonnet panelist for a lighter aspect, a Fable panelist only for high-complexity/high-impact work (a hard algorithm's core, deep bug-hunts, blast-radius analysis)" },
     aspects: { type: "array", items: { enum: ASPECTS }, description: "one aspect per panel member, in panelModels order, chosen for THIS task from the fixed vocabulary — pick the panel-size aspects that matter most, distinct, most-relevant first; omit for a single-member panel" },
     rationale: { type: "string", description: "one line on the composition chosen" },
   },
@@ -88,6 +89,8 @@ const PLAN_SCHEMA = {
     risks: { type: "string", description: "main risks or open questions, or 'none'" },
     greenBar: { type: "string", description: "the concrete build/test/lint command(s), from the PROJECT'S OWN rules, that define a green tree — every wave must end green by this bar; leave empty and raise a QUESTION in `risks` if the project's green criteria are unclear" },
     blocker: { type: "string", description: "set ONLY to raise an ask-back: the rough plan is internally contradictory, under-specified, or its premise is wrong given the code. Put the verbatim BLOCKER/QUESTION text (what is contradictory/wrong and the choices you see) here and return an EMPTY `steps` array; leave unset when producing a plan. A schema-legal channel — prose in place of this crashes the workflow." },
+    integrationDifficulty: { enum: ["low", "medium", "high"], description: "how hard THIS aspect's plan will be to reconcile with the other panellists' — conflicting structure, shared files, or contested sequencing raise it; used to pick the integrator tier" },
+    integrationDifficultyReason: { type: "string", description: "one line explaining the integrationDifficulty rating" },
     steps: {
       type: "array",
       description: "steps grouped into ascending waves; a wave is a COMPLETE, GREEN, DELIVERABLE slice — a milestone leaving the tree green per the project's own rules; same-wave steps MAY be dependent and MAY share files, but every same-wave dependency MUST be declared in dependsOn; later waves build on earlier waves' integrated result.",
@@ -99,6 +102,7 @@ const PLAN_SCHEMA = {
           files: { type: "array", items: { type: "string" }, description: "repo-relative files this step touches — the dispatcher uses them to route and order workers" },
           change: { type: "string", description: "the concrete change to make" },
           complexity: { enum: ["menial", "mechanical", "substantive"], description: TIERS_DESC },
+          confidence: { enum: ["low", "medium", "high"], description: "how settled this step is — 'low' flags a shaky step (uncertain change, unresolved detail) so the integrator and coordinator can scrutinise it" },
           wave: { type: "integer", description: "1-based wave number. A wave is a self-contained GREEN milestone; same-wave steps MAY depend on each other, but every intra-wave dependency MUST be declared via dependsOn; the executor resolves dispatch (parallel, merged, or chained). Later waves build on earlier waves' integrated result." },
           dependsOn: { type: "array", items: { type: "string" }, description: "ids of steps this step builds on — same or EARLIER wave only, never later; same-wave dependencies are resolved downstream by the dispatch composer (merge into one worker or chain workers)" },
           role: { enum: ["deliverable", "verify"], description: "'verify' ONLY for a step whose sole job is verification/formatting/lint of THIS wave's own work; everything else is 'deliverable' (default when omitted). A wave of only 'verify' steps is not allowed — verify is a wave's CLOSING step, never a whole wave; mislabelling a deliverable step 'verify' risks it being folded away." },
@@ -114,7 +118,7 @@ const roughBlock = ROUGH ? "\n\nRough plan drafted with the user (refine THIS �
 const refinePrompt = aspect =>
   "## Refine into an implementation plan\nTask: " + TASK + roughBlock + "\n" +
   (aspect
-    ? "You are one of several architects refining this plan IN PARALLEL, and you OWN one aspect of it: **" + aspect + "**. Work that aspect out thoroughly and correctly across the whole plan; leave the other aspects at a sound baseline — a separate integrator will merge your aspect's strengths with the others'. The whole rough plan above is your context.\n\n"
+    ? "You are one of several architects refining this plan IN PARALLEL, and you OWN one aspect of it: **" + aspect + "**. Work that aspect out thoroughly and correctly across the whole plan; leave the other aspects at a sound baseline — a separate integrator will merge your aspect's strengths with the others'. The whole rough plan above is your context. Also rate `integrationDifficulty` (low/medium/high) with a one-line `integrationDifficultyReason` — how hard your aspect's plan will be to reconcile with the other panellists' (conflicting structure, shared files, or contested sequencing raise it) — and tag each step's `confidence` (low/medium/high) so the integrator can scrutinise and down-weight the shaky ones.\n\n"
     : "\n") +
   GROUNDING + "\n\n" +
   "Turn the rough plan into a concrete plan of at most " + MAX_STEPS + " steps. For each step: name the file(s), describe the concrete change, state what to verify, tag its complexity (" + TIERS_DESC + "), and assign a 1-based WAVE number. Choose the complexity by weighing the judgement the step needs against the cost of getting it wrong.\n\n" +
@@ -132,8 +136,8 @@ const composePrompt = fixedPanel =>
   "## Choose the architect composition for this design\nTask: " + TASK + roughBlock + "\n" +
   (fixedPanel
     ? "The panel is FIXED at these " + fixedPanel.length + " models: [" + fixedPanel.join(", ") + "] — you are NOT choosing the models. Echo them back verbatim in `panelModels` (same order), and put your judgement into the ordered `aspects`: assign each panelist ONE aspect from the fixed vocabulary, in panelModels order, distinct, most task-relevant first.\n\n"
-    : "Decide who should refine this plan. On a multi-member panel each architect OWNS one aspect (correctness, architecture, decomposition, verification, risk); a single member does the whole refinement. Return `panelModels` — 1–5 entries of 'opus'/'fable', one architect each — and optionally `integratorModel` ('opus'/'fable') for the step that merges the aspect-refined plans into the final one. On a multi-member panel you must ALSO return `aspects` — one per panelist, in panelModels order, from the fixed vocabulary, most task-relevant first.\n\n" +
-      "Guidance: Opus is the default thinking tier and handles most designs well. Fable is stronger but bills extra — reach for it (a Fable panelist and/or a Fable integrator) only for HIGH-COMPLEXITY or HIGH-IMPACT work: the core of a hard algorithm, deep analysis of a large/existing codebase, hunting subtle long-standing bugs, or tracing the blast radius of a decision. A single ['opus'] suits a routine refinement; a 2–3 panel divides the plan into aspects. If you put Fable on the panel to own a hard aspect, set `integratorModel` to 'fable' too so its contribution is merged by an equal (the integrator defaults to the top tier in the panel). The integrator is ≥Opus, NEVER Sonnet.\n\n") +
+    : "Decide who should refine this plan. On a multi-member panel each architect OWNS one aspect (correctness, architecture, decomposition, verification, risk); a single member does the whole refinement. Return `panelModels` — 1–5 entries of 'opus'/'fable'/'sonnet', one architect each; a Sonnet panelist may be auto-assigned a lighter aspect, Opus is the default, a Fable panelist owns a hard aspect. On a multi-member panel you must ALSO return `aspects` — one per panelist, in panelModels order, from the fixed vocabulary, most task-relevant first.\n\n" +
+      "Guidance: Opus is the default thinking tier and handles most designs well. Sonnet can own a lighter aspect on a multi-member panel. Fable is stronger but bills extra — reach for a Fable panelist only for HIGH-COMPLEXITY or HIGH-IMPACT work: the core of a hard algorithm, deep analysis of a large/existing codebase, hunting subtle long-standing bugs, or tracing the blast radius of a decision. A single ['opus'] suits a routine refinement; a 2–3 panel divides the plan into aspects. You do NOT choose the integrator — its tier is deferred until after the panel fans out, defaulting to Opus and escalating to Fable when the panel flags high integration difficulty.\n\n") +
   "You are CHOOSING the composition and the ordered aspect assignment — you do not design the plan itself.\n\n" + COMMS
 if (!panelSpecified || composeForAspects) {
   phase("Compose")
@@ -143,17 +147,16 @@ if (!panelSpecified || composeForAspects) {
   )
   if (!panelSpecified) {
     if (picked && validModelList(picked.panelModels)) panelModels = picked.panelModels
-    if (!integSpecified && picked && MODEL_SET.includes(picked.integratorModel)) integratorModel = picked.integratorModel
     if (picked && picked.rationale) compositionRationale = picked.rationale
   }
   if (picked && Array.isArray(picked.aspects)) composerAspects = picked.aspects
 }
 // Static fallback (composer omitted or failed): spend Fable sparingly.
 if (!validModelList(panelModels)) panelModels = LEVEL === "deep" ? ["fable", "opus", "fable"] : ["opus"]
-// Integrator defaults to the top tier PRESENT in the panel (never below Opus): once
-// a Fable panelist owns a hard aspect, a Fable integrator merges it as an equal.
-if (!MODEL_SET.includes(integratorModel)) integratorModel = panelModels.includes("fable") ? "fable" : "opus"
-log("Composition: panel=[" + panelModels.join(",") + "] integrator=" + integratorModel + (compositionRationale ? " — " + compositionRationale : ""))
+// The integrator tier is deferred until after the panel fans out (resolved from the
+// panel's own integrationDifficulty signal), so log it here only when the coordinator
+// pinned it — otherwise it is chosen post-fan-out.
+log("Composition: panel=[" + panelModels.join(",") + "] integrator=" + (integSpecified ? integratorModel : "post-fan-out") + (compositionRationale ? " — " + compositionRationale : ""))
 
 // ─── Refine ───
 // A multi-member panel divides the labour: each architect OWNS one aspect of the
@@ -184,22 +187,49 @@ if (candidates.length === 0) return { error: "Refinement produced no candidate p
 const blocked = candidates.find(c => typeof c.blocker === "string" && c.blocker.trim())
 if (blocked) return { error: "design-panel BLOCKER: " + blocked.blocker.trim(), design: { recommendation: blocked.recommendation || "", rationale: blocked.rationale || "", risks: blocked.risks || "" }, plan: [] }
 
-// ─── Integrate: merge the aspect-refined plans into one coherent plan (≥Opus) ───
+// Resolve the deferred integrator tier from the panel's own difficulty signal: Opus
+// by default, escalating to Fable when any candidate flags integration as high. A
+// coordinator-specified integrator is left untouched.
+if (!integSpecified) integratorModel = candidates.some(c => c.integrationDifficulty === "high") ? "fable" : "opus"
+log("Integrator: " + integratorModel + (integSpecified ? " (specified)" : " (resolved post-fan-out)"))
+
+// ─── Integrate: merge the aspect-refined plans into one coherent plan ───
 // A single candidate IS the finished plan — nothing to merge, so return it directly
 // (no integrator), even if an integratorModel was named. Integrating one plan is a wasted call.
 let refined
 if (candidates.length > 1) {
   phase("Integrate")
   const block = candidates.map((c, i) =>
-    "### Plan [" + i + "]" + (c._aspect ? " — aspect owned: " + c._aspect : "") + "\nRecommendation: " + (c.recommendation || "") + "\nGreenBar: " + (c.greenBar || "") + "\nRisks: " + (c.risks || "") + "\nSteps:\n" +
-    (Array.isArray(c.steps) ? c.steps : []).map((s, k) => "  " + (k + 1) + ". (wave " + s.wave + ", " + s.complexity + ")" + (s.id ? " id=" + s.id : "") + (Array.isArray(s.dependsOn) && s.dependsOn.length ? " deps=[" + s.dependsOn.join(",") + "]" : "") + " " + s.title + " — " + s.change + (s.files && s.files.length ? " [" + s.files.join(", ") + "]" : "")).join("\n")
+    "### Plan [" + i + "]" + (c._aspect ? " — aspect owned: " + c._aspect : "") + (c.integrationDifficulty ? " [integration difficulty: " + c.integrationDifficulty + "]" : "") + "\nRecommendation: " + (c.recommendation || "") + "\nGreenBar: " + (c.greenBar || "") + "\nRisks: " + (c.risks || "") + "\nSteps:\n" +
+    (Array.isArray(c.steps) ? c.steps : []).map((s, k) => "  " + (k + 1) + ". (wave " + s.wave + ", " + s.complexity + (s.confidence ? ", confidence " + s.confidence : "") + ")" + (s.id ? " id=" + s.id : "") + (Array.isArray(s.dependsOn) && s.dependsOn.length ? " deps=[" + s.dependsOn.join(",") + "]" : "") + " " + s.title + " — " + s.change + (s.files && s.files.length ? " [" + s.files.join(", ") + "]" : "")).join("\n")
   ).join("\n\n")
   const aspectsLine = candidates.map(c => c._aspect).filter(Boolean).join("; ")
-  refined = await safeAgent(
+  const integratorPrompt =
     "## Integrate the aspect-refined plans into ONE\nTask: " + TASK + roughBlock + "\n" +
-    "You have " + candidates.length + " plan(s)" + (aspectsLine ? ", each refined by a specialist who OWNED one aspect (" + aspectsLine + ")" : "") + ". The panel has ALREADY deliberated and grounded their plans in the repo — TRUST that work. ADOPT each specialist's contribution on the aspect they owned as authoritative (the correctness specialist's edge-case steps, the architecture specialist's structure/reuse, the decomposition specialist's waving, the verification specialist's checks, and so on). Where members merely cover different ground, UNION their steps. MEDIATE only where two members GENUINELY conflict — they contradict each other, or one member's step would break another's — and when you mediate, prefer the aspect-owner's intent for the disputed aspect. Do NOT re-derive, re-plan, or 'improve' a member's aspect where there is no conflict — that discards the deliberation you are here to preserve. Keep it to at most " + MAX_STEPS + " steps, correctly waved (each wave a self-contained green deliverable; same-wave dependencies declared via id/dependsOn; no verify/format-only wave), each step tagged with complexity (" + TIERS_DESC + "). PRESERVE each step's id, dependsOn edges and role, tagging a closing verification/formatting/lint step with `role: 'verify'` and leaving every other step at the default 'deliverable', and emit one reconciled greenBar.\n\nThe panel already explored the repository, so you do NOT need to re-explore: read code ONLY to settle a specific conflict a candidate's citation cannot resolve. Cite path:line for load-bearing claims, follow repo conventions (including British spelling in identifiers/output where the repo uses it), and apply YAGNI — no speculative scope." + "\n\n" + block + "\n\n" + COMMS,
-    { label: "integrate", phase: "Integrate", model: integratorModel, effort: "max", agentType: NS + "architect", schema: PLAN_SCHEMA }
-  )
+    "You have " + candidates.length + " plan(s)" + (aspectsLine ? ", each refined by a specialist who OWNED one aspect (" + aspectsLine + ")" : "") + ". The panel has ALREADY deliberated and grounded their plans in the repo — TRUST that work. ADOPT each specialist's contribution on the aspect they owned as authoritative (the correctness specialist's edge-case steps, the architecture specialist's structure/reuse, the decomposition specialist's waving, the verification specialist's checks, and so on). Where members merely cover different ground, UNION their steps. MEDIATE only where two members GENUINELY conflict — they contradict each other, or one member's step would break another's — and when you mediate, prefer the aspect-owner's intent for the disputed aspect. Do NOT re-derive, re-plan, or 'improve' a member's aspect where there is no conflict — that discards the deliberation you are here to preserve. Keep it to at most " + MAX_STEPS + " steps, correctly waved (each wave a self-contained green deliverable; same-wave dependencies declared via id/dependsOn; no verify/format-only wave), each step tagged with complexity (" + TIERS_DESC + "). PRESERVE each step's id, dependsOn edges and role, tagging a closing verification/formatting/lint step with `role: 'verify'` and leaving every other step at the default 'deliverable', and emit one reconciled greenBar.\n\nEach candidate step carries a `confidence` (low/medium/high). SCRUTINISE and down-weight low-confidence steps when reconciling, and CARRY the confidence through onto each step you emit so the coordinator can see which steps remain shaky. If two grounded plans GENUINELY contradict and you cannot reconcile them, set `blocker` with the verbatim conflict rather than guessing.\n\nThe panel already explored the repository, so you do NOT need to re-explore: read code ONLY to settle a specific conflict a candidate's citation cannot resolve. Cite path:line for load-bearing claims, follow repo conventions (including British spelling in identifiers/output where the repo uses it), and apply YAGNI — no speculative scope." + "\n\n" + block + "\n\n" + COMMS
+  // Escalation ladder: start at the resolved integrator tier and climb only when the
+  // integrator raises a reconciliation blocker (never on a null crash, which falls
+  // through to the existing null handling below). A persistent blocker at the top tier
+  // surfaces to the coordinator via the blocker→{error} return.
+  const LADDER = ["sonnet", "opus", "fable"]
+  let startIdx = Math.max(0, LADDER.indexOf(integratorModel))
+  let stuckReason = ""
+  for (let k = startIdx; k < LADDER.length; k++) {
+    const escalationNote = stuckReason
+      ? "\n\n## Escalation\nA prior, lower-tier integrator could NOT reconcile these plans and raised:\n" + stuckReason + "\nYou are the ESCALATED integrator — resolve this conflict and produce the merged plan; do not merely re-raise it.\n"
+      : ""
+    refined = await safeAgent(
+      integratorPrompt + escalationNote,
+      { label: "integrate:" + LADDER[k], phase: "Integrate", model: LADDER[k], effort: "max", agentType: NS + "architect", schema: PLAN_SCHEMA }
+    )
+    if (!refined) break
+    if (typeof refined.blocker === "string" && refined.blocker.trim() && k < LADDER.length - 1) {
+      stuckReason = refined.blocker.trim()
+      log("integrate: " + LADDER[k] + " could not reconcile — escalating to " + LADDER[k + 1] + ": " + stuckReason)
+      continue
+    }
+    break
+  }
 } else {
   refined = candidates[0]
 }
@@ -218,6 +248,7 @@ const steps = rawSteps.map((s, i) => ({
   files: Array.isArray(s.files) ? s.files : [],
   change: s.change,
   complexity: TIERS.includes(s.complexity) ? s.complexity : "mechanical",
+  confidence: ["low", "medium", "high"].includes(s.confidence) ? s.confidence : undefined,
   wave: Number.isInteger(s.wave) && s.wave > 0 ? s.wave : 1,
   verify: s.verify || "",
   dependsOn: [],

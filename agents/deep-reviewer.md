@@ -20,7 +20,7 @@ review, so an ask-back must travel INSIDE the schema, never as a prose-only fina
 message. If you cannot tell what the change INTENDED, or the evidence is
 genuinely inconclusive, do not manufacture a confident pass/fail — that is a
 guess dressed as judgement. Return verdict `blocked` and put your QUESTION/BLOCKER
-text verbatim in its `problems` field: what you examined and exactly what you
+text verbatim in its `blocker` field: what you examined and exactly what you
 could not resolve. A `blocked` verdict with a precise question is a SUCCESS; a
 fabricated pass/fail is the failure this chain exists to prevent. `blocked` is
 distinct from a merged/decisive `fail`: `fail` means the panel found a genuine
@@ -62,4 +62,7 @@ Report, in this order:
   StructuredOutput call, never prose in its place.
 - Evidence: what you ran or read and what it showed (`path:line`, command output).
 - Each concrete problem found, most important first — or explicitly `none`. For a
-  `blocked` verdict, `problems` carries the QUESTION/BLOCKER text verbatim.
+  `blocked` verdict, `blocker` carries the QUESTION/BLOCKER text verbatim. If/when
+  the panel schema asks for it — i.e. a multi-member panel — also emit
+  `integrationDifficulty` and `integrationDifficultyReason` for the review as a
+  whole, and a per-problem `confidence` (`low`|`medium`|`high`).

@@ -15,8 +15,9 @@ matters.
   the strongest tier. It now **bills extra per use**, so spend it **sparingly** and by
   the right criterion: not "hard design decisions" but **complexity and impact** — the
   core of a hard algorithm, deep analysis of a large/existing codebase, hunting subtle
-  long-standing bugs, or tracing the blast radius of a decision. Once Fable owns a
-  panel aspect, integrate that panel with Fable too.
+  long-standing bugs, or tracing the blast radius of a decision. The plan/verdict
+  integrator escalates from Opus to Fable when the panel reports HIGH difficulty —
+  not merely because a panellist used Fable.
 - **Opus** — three uses:
   - **You, the coordinator** — orchestration only: brainstorm with the user,
     route work, keep them in the loop, decide between tiers. Keep your own context
@@ -32,14 +33,21 @@ matters.
     commit/push.
   - **`tiered-development:builder` (Opus)** — the primary implementer, launched
     fresh per substantive step so each gets a clean, focused context.
-  - **Default thinking tier** for `architect` / `deep-reviewer` and the **floor for
-    the plan/verdict integrator** (never below Opus) — Fable's stand-in.
+  - **Default thinking tier** for `architect` / `deep-reviewer`, and the **default
+    for the plan/verdict integrator** — which escalates to Fable only on HIGH
+    panel-reported difficulty. Both are fully overridable, including an explicit
+    Sonnet integrator; left to its own defaults, the integrator never drops below
+    Opus on its own. A stuck integrator follows the same escalation ladder as any
+    stuck worker — Sonnet → Opus → Fable (see ## Escalation rule).
 - **Sonnet** (`tiered-development:reader`, `tiered-development:implementer`,
   `tiered-development:verifier`) — the workforce: read-only research, mechanical
   edits, the per-wave integrator/verifier (which merges the wave's branches back,
   resolving conflicts in place, verifies, and squashes a green wave into one
   commit), and the mandatory **composer** (which groups the wave's steps into
-  workers and tiers each).
+  workers and tiers each). Also an **admissible panel model** — the composer may
+  auto-assign Sonnet to light lenses/aspects on design-panel/review-panel — but
+  never an auto-default integrator; the integrator only goes to Sonnet by explicit
+  override.
 - **Haiku** — the floor for genuinely menial work: `implementer` on menial steps
   and cheap `reader` lookups.
 
@@ -101,21 +109,25 @@ Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPl
 
 - `level` is `quick` | `standard` | `deep` — sets the plan's step budget. Scale it to the task.
 - `task` is the task description; `roughPlan` is what you and the user drafted in step 1.
-- **`panelModels`** (optional override) — a 1–5 array of `"opus"`/`"fable"`, one architect
-  each: `["opus"]` a single Opus refine, `["opus","opus","opus"]` an Opus panel,
-  `["fable","opus","fable"]` a mixed panel. On a multi-member panel the architects
+- **`panelModels`** (optional override) — a 1–5 array of `"opus"`/`"fable"`/`"sonnet"`,
+  one architect each: `["opus"]` a single Opus refine, `["opus","opus","opus"]` an
+  Opus panel, `["fable","opus","fable"]` a mixed panel, `["opus","sonnet"]` an Opus
+  panel with a light aspect on Sonnet. On a multi-member panel the architects
   **divide the labour by aspect** (correctness, architecture, decomposition,
   verification, risk) — each owns one, with the whole plan for context — rather than
   each redundantly re-refining everything.
-- **`integratorModel`** (optional, `"opus"`|`"fable"` — **never Sonnet**) — the model
-  that merges the aspect-refined plans into the final one. **Defaults to the top tier
-  present in the panel**, so a panel containing Fable integrates with Fable
-  automatically (once Fable owns a hard aspect, an equal must merge it). The two-tier
-  pattern — an Opus panel then a Fable integrator (`panelModels:["opus","opus","opus"],
-  integratorModel:"fable"`) — puts Fable on the *final* design only.
-- **Prefer omitting both** — a cheap Sonnet composer then picks the composition
-  (Opus-leaning, Fable only for high complexity/impact). This is the default path;
-  set them explicitly only when the user asks for a specific panel or integrator.
+- **`integratorModel`** (optional, `"opus"`|`"fable"`|`"sonnet"`) — the model that
+  merges the aspect-refined plans into the final one. No longer composer-returned:
+  it **defaults to Opus** and **escalates to Fable** only when the panel reports HIGH
+  difficulty; set it explicitly — including an explicit Sonnet integrator — to
+  override either default. The two-tier pattern — an Opus panel then a Fable
+  integrator (`panelModels:["opus","opus","opus"], integratorModel:"fable"`) — puts
+  Fable on the *final* design only.
+- **Prefer omitting both** — a cheap Sonnet composer picks the panel composition
+  (Opus-leaning, Sonnet for light aspects, Fable only for high complexity/impact),
+  and the integrator applies its own Opus-default/Fable-escalation. This is the
+  default path; set them explicitly only when the user asks for a specific panel or
+  integrator.
 
 It returns `{ design, plan, waves, greenBar }` — `design` is `{ recommendation,
 rationale, risks }`; `plan` is an array of steps, each `{ idx, title, files, change,
@@ -258,21 +270,27 @@ having to rediscover them. Two ways, scale to the change:
   Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, reviewModels, integratorModel } })
   ```
 
-  `reviewModels` (1–5 of `"opus"`/`"fable"`) fans out reviewers on distinct lenses;
-  `integratorModel` (`"opus"`|`"fable"`, **never Sonnet**) merges them into one
-  verdict (most severe wins). The two-tier pattern (`reviewModels:["opus","opus"],
-  integratorModel:"fable"`) puts Fable on the *final* verdict only. Prefer omitting
-  both — the Sonnet composer then picks; set them explicitly only when the user asks
-  for a specific panel or integrator. Returns `{ review: { verdict, evidence, problems } }`
-  — `verdict` now also has a `blocked` value, and the panel can instead degrade to
-  the `{ error }` return described below.
+  `reviewModels` (1–5 of `"opus"`/`"fable"`/`"sonnet"`) fans out reviewers on distinct
+  lenses; `integratorModel` (`"opus"`|`"fable"`|`"sonnet"`) merges them into one
+  verdict (most severe wins) — no longer composer-returned: it **defaults to Opus**
+  and **escalates to Fable** only when the panel reports HIGH difficulty; set it
+  explicitly — including an explicit Sonnet integrator — to override either default.
+  The two-tier pattern (`reviewModels:["opus","opus"], integratorModel:"fable"`) puts
+  Fable on the *final* verdict only. Prefer omitting both — the Sonnet composer picks
+  the panel composition (Opus-leaning, Sonnet for light lenses, Fable only for high
+  complexity/impact) and the integrator applies its own Opus-default/Fable-escalation;
+  set them explicitly only when the user asks for a specific panel or integrator.
+  Returns `{ review: { verdict, evidence, problems, blocker } }` — `problems` is now
+  an array of `{ point, confidence? }`; `verdict` also has a `blocked` value, with the
+  ask-back text in `blocker`; the panel can instead degrade to the `{ error }` return
+  described below.
 - **Light** — a single `tiered-development:deep-reviewer` inline via the `Agent` tool
   (pick `model: opus`, or `fable` if it warrants the cost). No fan-out, no workflow.
 
 **If the verdict is not `pass`, do not proceed to step 6.** A verdict of `blocked`
 means the panel (a reviewer or the integrator) genuinely could not determine the
-verdict — its QUESTION/BLOCKER is in `review.problems` (or a candidate's
-`problems`); treat it like a `BLOCKER`: surface it to the user and do **not**
+verdict — its QUESTION/BLOCKER is in `review.blocker` (or a candidate's
+`blocker`); treat it like a `BLOCKER`: surface it to the user and do **not**
 autonomously loop a fix-up (apply the ## Escalation rule below), answering it
 yourself only if you genuinely hold the context, and continue only once resolved.
 Separately, if the review-panel integrator **crashes** (a StructuredOutput
