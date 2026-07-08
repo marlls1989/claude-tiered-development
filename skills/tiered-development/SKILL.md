@@ -164,6 +164,10 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
   a file** (the integrator reconciles), and batches run in sequence, each dispatched
   onto the prior batch's integrated tip. A step's `dependsOn` is **advisory** input the
   composer may override; an explicit `complexity` is still a **floor**, never downgraded.
+  It prefers **few workers**: sequential dependents that do not build on a parallel
+  fan-out merge into one worker (mixing tiers freely — the merged job's tier is the
+  **max floor** of its steps), and a later batch starts **only** to build on a prior
+  batch's integrated parallel fan-out.
 - `isGit` is your first probe result; `totalSteps` is the whole plan's step count
   (for nicer labels).
 - `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's

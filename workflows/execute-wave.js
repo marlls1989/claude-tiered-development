@@ -268,9 +268,9 @@ if (!needCompose) {
     "Rules (obey exactly):\n" +
     "- COVER every task's idx EXACTLY ONCE across all jobs. Never split a single task across jobs.\n" +
     "- You have the FINAL word on order and execution. A task's 'Advisory dependency' below is the planner's suggestion — honour it when it is real, override it when it is not.\n" +
-    "- MERGE tightly-dependent tasks into ONE job, in dependency order; prefer grouping SIMILAR tasks together in one job.\n" +
+    "- Bias toward FEW jobs: MERGE sequential dependents that do NOT build on a prior PARALLEL fan-out into ONE worker, in dependency order; prefer grouping SIMILAR tasks together. Mixing tiers is fine — the merged job's tier is the MAX floor of its tasks (see the FLOOR rule below).\n" +
     "- INDEPENDENT tasks belong in the SAME batch as separate parallel jobs — EVEN IF they touch the same file. The integrator resolves same-file overlap; file overlap is NEVER a reason to serialise or merge — only tight dependency is.\n" +
-    "- Start a LATER batch only for a job that must BUILD ON the committed, integrated result of an earlier job.\n" +
+    "- Start a LATER batch ONLY to build on a prior batch's integrated PARALLEL fan-out of TWO OR MORE jobs. A dependency on a SINGLE earlier job is NOT a batch boundary — fold the dependent into that same job.\n" +
     "- A task's current tier is a FLOOR: never tier a job BELOW any of its tasks' stated tiers. You may raise a blank/cheap task to its job's tier when you bundle it.\n" +
     SELECTION_PRINCIPLE + "\n\n" +
     "Return `batches` in execution order — each { jobs: [ { tasks: [idx, ...], complexity } ] } — covering every idx below exactly once.\n\n" +
