@@ -5,6 +5,11 @@ All notable changes to the **tiered-development** plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-07-08
+
+### Changed
+- **Trust-first panel integrators.** Both the design-panel plan integrator and the review-panel verdict integrator now adopt the panel's deliberation instead of re-doing it. The design integrator gets its own scoped grounding — the panel already explored the repo, so it reads code only to settle a genuine conflict — in place of the from-scratch grounding brief, and mediates only where members genuinely conflict. The review integrator adjudicates only disputed claims rather than re-verifying the whole change. Output schemas, control flow, and workflow return shapes are unchanged.
+
 ## [0.6.0] - 2026-07-07
 
 ### Changed

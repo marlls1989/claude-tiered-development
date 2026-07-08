@@ -118,7 +118,7 @@ if (candidates.length > 1) {
   ).join("\n\n")
   review = await agent(
     "## Integrate the panel into ONE final verdict\n" + contextBlock +
-    "You have " + candidates.length + " independent review(s) of this change. Merge them into ONE verdict. The overall verdict is the MOST SEVERE present — `fail` beats `needs-changes` beats `pass`. Consolidate and de-duplicate the problems, keeping the most important first, and drop any a later reviewer convincingly refuted. Verify the load-bearing claims yourself if cheap.\n\n" + block + "\n\n" +
+    "You have " + candidates.length + " independent review(s) of this change. The panel has ALREADY reviewed it — TRUST their findings and do NOT re-review the change from scratch. Merge them into ONE verdict: the overall verdict is the MOST SEVERE present — `fail` beats `needs-changes` beats `pass`. Consolidate and de-duplicate the problems, keeping the most important first. Adjudicate ONLY where reviewers DISAGREE — one makes a claim another refutes; drop any claim a later reviewer convincingly refuted. When adjudicating such a DISPUTED claim you may verify that specific claim yourself if it is cheap — this is not a licence for blanket re-verification.\n\n" + block + "\n\n" +
     "Return the final VERDICT, the merged evidence, and the consolidated problems (or 'none').\n\n" + COMMS,
     { label: "integrate", phase: "Integrate", model: integratorModel, effort: "max", agentType: NS + "deep-reviewer", schema: REVIEW_SCHEMA }
   )
