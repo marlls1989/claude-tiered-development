@@ -16,7 +16,7 @@ cost of getting it wrong.
         ┌────────────────────────── Opus ──────────────────────────────┐
         │  coordinator     brainstorm, route, gate, keep you in loop    │
         │  builder         a fresh Opus agent per SUBSTANTIVE step      │
-        │  architect / deep-reviewer / plan-integrator (≥Opus floor)    │
+        │  architect / deep-reviewer / integrator (Opus, overridable)   │
         └──────────────────────────────────────────────────────────────┘
                               ▲  results            mechanical ▼
         ┌───────────────────────── Sonnet ─────────────────────────────┐
@@ -80,15 +80,20 @@ per-step `complexity`); omit it and a cheap **Sonnet composer** picks, spending
 Fable sparingly.
 
 - **`design-panel`** — refines the brainstormed rough plan into a dispatchable,
-  wave-grouped plan. `panelModels` (1–5 of `opus`/`fable`) sets the architect
-  composition — single, panel, mixed, or the two-tier *Opus-panel-then-Fable-
-  integrator* pattern; on a multi-member panel the architects **divide the plan by
-  aspect** (each owns correctness / architecture / decomposition / verification /
-  risk). The plan `integratorModel` is **≥Opus, never Sonnet**, and **defaults to the
-  panel's top tier** (Fable if any panelist is Fable). Called as
+  wave-grouped plan. `panelModels` (1–5 of `opus`/`fable`/`sonnet`) sets the
+  architect composition — single, panel, mixed, or the two-tier *Opus-panel-then-
+  Fable-integrator* pattern; on a multi-member panel the architects **divide the
+  plan by aspect** (each owns correctness / architecture / decomposition /
+  verification / risk), and Sonnet is admissible for a lighter aspect. The plan
+  `integratorModel` **defaults to Opus**, **escalates to Fable only when a
+  panellist reports high `integrationDifficulty`**, and is fully overridable —
+  including to an explicit Sonnet — via `integratorModel`; it is never
+  auto-defaulted below Opus. A stuck integrator climbs a `sonnet → opus → fable`
+  escalation ladder. Called as
   `Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })`;
-  returns `{ design, plan, waves, greenBar }` — steps carry explicit `dependsOn`,
-  and waves are complete, green, deliverable slices.
+  returns `{ design, plan, waves, greenBar }` — steps carry explicit `dependsOn`
+  and an optional per-step `confidence` (low/medium/high), and waves are
+  complete, green, deliverable slices.
 - **`execute-wave`** — runs one wave: a **mandatory** Sonnet composer **owns
   dispatch**, grouping the wave's steps into worker assignments and tiering each
   (substantive → Opus `builder`, mechanical → Sonnet, menial → Haiku `implementer`);
@@ -110,10 +115,15 @@ Fable sparingly.
   `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, greenBar } })`
   once per wave.
 - **`review-panel`** — the deep final review: a fan-out of reviewers (each on a
-  distinct lens) closed by a ≥Opus integrator that merges them into ONE verdict
-  (most severe wins). `reviewModels` + `integratorModel` mirror `design-panel`.
+  distinct lens, Sonnet admissible on a lighter lens) closed by an integrator
+  that merges them into ONE verdict (most severe wins). `reviewModels` +
+  `integratorModel` mirror `design-panel`'s doctrine (Opus-default integrator,
+  escalating to Fable on high integration difficulty, overridable incl.
+  Sonnet, with the same `sonnet → opus → fable` stuck-integrator ladder).
   Called as `Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, reviewModels, integratorModel } })`;
-  returns `{ review: { verdict, evidence, problems } }`.
+  returns `{ review: { verdict, evidence, problems, blocker } }` — `problems`
+  is an array of `{ point, confidence? }` entries, and `blocker` carries the
+  verbatim QUESTION/BLOCKER text for a `blocked` verdict.
 
 ### Comms protocol (`skills/tiered-development/comms-protocol.md`)
 

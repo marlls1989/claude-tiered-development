@@ -150,6 +150,7 @@ if (!integSpecified) integratorModel = candidates.some(c => c.integrationDifficu
 // A single verdict needs no merge — return it directly (no integrator), even if an
 // integratorModel was named. Integrating one review is a wasted call.
 let review
+let stuckReason = ""
 if (candidates.length > 1) {
   phase("Integrate")
   log("Integrator: " + integratorModel + (integSpecified ? "" : " (resolved from integration difficulty)"))
@@ -165,7 +166,7 @@ if (candidates.length > 1) {
   // path below — NEVER escalated, and never a fabricated verdict.
   const LADDER = ["sonnet", "opus", "fable"]
   const startIdx = Math.max(0, LADDER.indexOf(integratorModel))
-  let stuckReason = ""
+  stuckReason = ""
   const prompt =
     "## Integrate the panel into ONE final verdict\n" + contextBlock +
     "You have " + candidates.length + " independent review(s) of this change. The panel has ALREADY reviewed it — TRUST their findings and do NOT re-review the change from scratch. Merge them into ONE verdict: the overall verdict is the MOST SEVERE present — `fail` beats `needs-changes` beats `pass`. Consolidate and de-duplicate the problems into the problems array (each an entry with a `point`, most important first), carrying each source problem's `confidence` through; SCRUTINISE and DOWN-WEIGHT low-confidence items — verify a low-confidence claim yourself if cheap before keeping it, and drop the ones that do not hold up. Adjudicate ONLY where reviewers DISAGREE — one makes a claim another refutes; drop any claim a later reviewer convincingly refuted. When adjudicating such a DISPUTED claim you may verify that specific claim yourself if it is cheap — this is not a licence for blanket re-verification.\n\n" +
@@ -191,12 +192,12 @@ if (candidates.length > 1) {
 }
 
 if (!review || !review.verdict) {
-  return { error: "Review failed to produce a verdict." + (agentCrash ? " (integrator crashed: " + agentCrash + ")" : ""), candidates: candidates.map(({ _lens, ...rest }) => rest) }
+  return { error: "Review failed to produce a verdict." + (agentCrash ? " (integrator crashed: " + agentCrash + ")" : "") + (stuckReason ? " | prior integrator blocker: " + stuckReason : ""), candidates: candidates.map(({ _lens, ...rest }) => rest) }
 }
 log("Review verdict: " + review.verdict)
 
 return {
   level: LEVEL,
-  review: { verdict: review.verdict, evidence: review.evidence || "", problems: Array.isArray(review.problems) ? review.problems : [], blocker: review.blocker || "" },
+  review: { verdict: review.verdict, evidence: review.evidence || "", problems: Array.isArray(review.problems) ? review.problems : [], blocker: (review.blocker && review.blocker.trim()) ? review.blocker : (review.verdict === "blocked" ? "(integrator returned a blocked verdict without explicit blocker text — see evidence)" : (review.blocker || "")) },
   candidates: candidates.map(({ _lens, ...rest }) => rest),
 }

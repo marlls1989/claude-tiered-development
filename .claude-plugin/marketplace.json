@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "tiered-development",
-      "description": "Multi-tier model delegation: Opus coordinates (brainstorm + gate) and picks a tier per slice (or a Sonnet composer does) — Opus/Fable design & review, Opus builds substantive code, Sonnet mechanical work & verification, Haiku menial edits. Fable spent sparingly.",
+      "description": "Multi-tier model delegation: Opus coordinates (brainstorm + gate) and picks a tier per slice (or a Sonnet composer does) — Sonnet-capable design & review via difficulty-driven Opus/Fable integrators (Opus default, Fable on high difficulty), Opus builds substantive code, Sonnet mechanical work & verification, Haiku menial edits. Fable spent sparingly.",
       "version": "0.7.0",
       "source": "./",
       "author": {

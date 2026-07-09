@@ -197,6 +197,7 @@ log("Integrator: " + integratorModel + (integSpecified ? " (specified)" : " (res
 // A single candidate IS the finished plan — nothing to merge, so return it directly
 // (no integrator), even if an integratorModel was named. Integrating one plan is a wasted call.
 let refined
+let stuckReason = ""
 if (candidates.length > 1) {
   phase("Integrate")
   const block = candidates.map((c, i) =>
@@ -213,10 +214,9 @@ if (candidates.length > 1) {
   // surfaces to the coordinator via the blocker→{error} return.
   const LADDER = ["sonnet", "opus", "fable"]
   let startIdx = Math.max(0, LADDER.indexOf(integratorModel))
-  let stuckReason = ""
   for (let k = startIdx; k < LADDER.length; k++) {
     const escalationNote = stuckReason
-      ? "\n\n## Escalation\nA prior, lower-tier integrator could NOT reconcile these plans and raised:\n" + stuckReason + "\nYou are the ESCALATED integrator — resolve this conflict and produce the merged plan; do not merely re-raise it.\n"
+      ? "\n\n## Escalation\nA prior, lower-tier integrator could NOT reconcile these plans and raised:\n" + stuckReason + "\nYou are the ESCALATED, more-capable integrator — genuinely attempt the reconciliation the prior tier could not, and produce the merged plan. If, and ONLY if, the obstacle is a real premise problem or an open user question that no tier can resolve, set `blocker` again with the verbatim ask — surface the genuine ask-back, never guess.\n"
       : ""
     refined = await safeAgent(
       integratorPrompt + escalationNote,
@@ -235,7 +235,7 @@ if (candidates.length > 1) {
 }
 
 // agentCrash is fresh here: refined is null ONLY on the integrator path (the single-candidate branch sets refined = candidates[0], always truthy), whose safeAgent reset agentCrash for its own call.
-if (!refined) return { error: "design-panel: refinement crashed — " + (agentCrash || "the integrator produced no valid StructuredOutput") + ". No plan produced; worktrees/commits (if any) left for manual recovery.", design: null, plan: [] }
+if (!refined) return { error: "design-panel: refinement crashed — " + (agentCrash || "the integrator produced no valid StructuredOutput") + (stuckReason && stuckReason.trim() ? " | prior integrator blocker: " + stuckReason.trim() : "") + ". No plan produced; worktrees/commits (if any) left for manual recovery.", design: null, plan: [] }
 if (typeof refined.blocker === "string" && refined.blocker.trim()) return { error: "design-panel BLOCKER: " + refined.blocker.trim(), design: { recommendation: refined.recommendation || "", rationale: refined.rationale || "", risks: refined.risks || "" }, plan: [] }
 if (!Array.isArray(refined.steps) || refined.steps.length === 0) return { error: "Refinement failed to produce steps.", design: { recommendation: refined.recommendation, rationale: refined.rationale, risks: refined.risks }, plan: [] }
 

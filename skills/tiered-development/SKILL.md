@@ -131,8 +131,10 @@ Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPl
 
 It returns `{ design, plan, waves, greenBar }` — `design` is `{ recommendation,
 rationale, risks }`; `plan` is an array of steps, each `{ idx, title, files, change,
-complexity, wave, verify, dependsOn }` (complexity ∈ `menial`|`mechanical`|
-`substantive`; `dependsOn` is an array of prerequisite step `idx` values). Waves are
+complexity, wave, verify, dependsOn, confidence? }` (complexity ∈ `menial`|`mechanical`|
+`substantive`; `dependsOn` is an array of prerequisite step `idx` values; `confidence`
+∈ `low`|`medium`|`high`, optional). A `low` `confidence` on a step flags a shaky part
+of the plan — scrutinise it at the step-3 gate rather than waving it through. Waves are
 COMPLETE, GREEN, DELIVERABLE slices — green per the project's own rules, carried in
 `greenBar` — and same-wave steps may be dependent and share files, with every
 dependency made explicit in `dependsOn`. If `design.risks` carries a QUESTION about
@@ -281,9 +283,11 @@ having to rediscover them. Two ways, scale to the change:
   complexity/impact) and the integrator applies its own Opus-default/Fable-escalation;
   set them explicitly only when the user asks for a specific panel or integrator.
   Returns `{ review: { verdict, evidence, problems, blocker } }` — `problems` is now
-  an array of `{ point, confidence? }`; `verdict` also has a `blocked` value, with the
-  ask-back text in `blocker`; the panel can instead degrade to the `{ error }` return
-  described below.
+  an array of `{ point, confidence? }` (`confidence` ∈ `low`|`medium`|`high`,
+  optional) — a `low` `confidence` on a point flags a shaky finding, so weight it into
+  your final-review focus rather than treating it at face value; `verdict` also has a
+  `blocked` value, with the ask-back text in `blocker`; the panel can instead degrade
+  to the `{ error }` return described below.
 - **Light** — a single `tiered-development:deep-reviewer` inline via the `Agent` tool
   (pick `model: opus`, or `fable` if it warrants the cost). No fan-out, no workflow.
 
