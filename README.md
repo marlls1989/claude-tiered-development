@@ -8,34 +8,38 @@ composer) pick the tier for each slice, weighing the judgement it needs against 
 cost of getting it wrong.
 
 ```
-        ┌──────────── Fable — premium tier, spent sparingly ───────────┐
-        │  architect / deep-reviewer / integrator   opt-in for high      │
-        │  complexity or impact — deep bug-hunts, blast-radius analysis  │
+        ┌─────────── Fable — premium tier, spent sparingly ────────────┐
+        │  architect / deep-reviewer / integrator   opt-in for high    │
+        │  complexity or impact — deep bug-hunts, blast-radius analysis│
         └──────────────────────────────────────────────────────────────┘
                               ▲  opt-in top / integrator
-        ┌────────────────────────── Opus ──────────────────────────────┐
-        │  coordinator     brainstorm, route, gate, keep you in loop    │
-        │  builder         a fresh Opus agent per SUBSTANTIVE step      │
-        │  architect / deep-reviewer / integrator (Opus, overridable)   │
+        ┌──────────────────────────── Opus ────────────────────────────┐
+        │  coordinator     brainstorm, route, gate, keep you in loop   │
+        │  builder         a fresh Opus agent per SUBSTANTIVE step     │
+        │  architect / deep-reviewer / integrator   (default here)     │
         └──────────────────────────────────────────────────────────────┘
                               ▲  results            mechanical ▼
-        ┌───────────────────────── Sonnet ─────────────────────────────┐
+        ┌─────────────────────────── Sonnet ───────────────────────────┐
         │  implementer     mechanical edits                            │
         │  reader          read-only research → digest                 │
         │  verifier        merge/resolve, verify, squash on green      │
         │  composer        groups + tiers steps                        │
+        │  architect / deep-reviewer   admissible on a lighter         │
+        │                  panel lens/aspect; integrator by opt-in     │
         └──────────────────────────────────────────────────────────────┘
                               ▲  results            menial ▼
-        ┌───────────────────────── Haiku ──────────────────────────────┐
+        ┌─────────────────────────── Haiku ────────────────────────────┐
         │  implementer     menial edits                                │
+        │  reader          cheap lookups                               │
         └──────────────────────────────────────────────────────────────┘
 ```
 
 **The through-line:** you brainstorm a rough plan with the user → an architect
-(Opus by default, Fable for high complexity/impact — single, or a panel that divides
-the plan by aspect) refines it into a waved plan → the coordinator routes each wave →
-fresh Opus/Sonnet/Haiku workers each build one well-scoped slice in its own worktree
-→ a review closes the loop over the whole change.
+(Opus by default, Sonnet admissible on a lighter aspect, Fable for high
+complexity/impact — single, or a panel that divides the plan by aspect) refines it
+into a waved plan → the coordinator routes each wave → fresh Opus/Sonnet/Haiku
+workers each build one well-scoped slice in its own worktree → a review closes the
+loop over the whole change.
 
 ## What's in the box
 
@@ -43,11 +47,11 @@ fresh Opus/Sonnet/Haiku workers each build one well-scoped slice in its own work
 
 | Agent | Tier | Role |
 |-------|------|------|
-| `architect` | Opus / Fable | Refines the brainstormed rough plan into a dispatchable, wave-grouped plan. Read-only; the plan is the deliverable. Opus by default; Fable for high complexity/impact. A multi-member panel divides the plan by aspect. |
-| `deep-reviewer` | Opus / Fable | Final deep, cross-cutting review after the per-wave check. Read-only, adversarial. Opus by default; Fable when it warrants the cost. |
+| `architect` | Sonnet / Opus / Fable | Refines the brainstormed rough plan into a dispatchable, wave-grouped plan. Read-only; the plan is the deliverable. Opus by default; Sonnet admissible on a lighter aspect; Fable for high complexity/impact. A multi-member panel divides the plan by aspect. |
+| `deep-reviewer` | Sonnet / Opus / Fable | Final deep, cross-cutting review after the per-wave check. Read-only, adversarial. Opus by default; Sonnet admissible on a lighter lens; Fable when it warrants the cost. |
 | `builder` | Opus | Primary implementer of substantive, judgement-requiring code. May decide the *how*, never re-opens the design. |
 | `implementer` | Sonnet / Haiku | Mechanical (Sonnet) or menial (Haiku) execution of a single precise step. No design judgement. |
-| `reader` | Sonnet / Haiku | Read-only research; returns a cited digest, not raw file dumps. |
+| `reader` | Sonnet / Haiku | Read-only research; returns a cited digest, not raw file dumps. Haiku for cheap lookups. |
 | `verifier` | Sonnet | Merges the wave's worker branches back (resolving conflicts in place), one adversarial check per wave against the integrated tree and the plan's stated intent (diffing against the kept worktrees to pinpoint merge-caused faults). On staged waves it merges only the final stage's pending branches (earlier stages were integrated per-stage). Gates the green squash on the project's green bar before collapsing the wave into one summary commit. |
 
 ### Skill (`skills/tiered-development/`)
