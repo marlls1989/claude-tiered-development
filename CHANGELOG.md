@@ -5,6 +5,11 @@ All notable changes to the **tiered-development** plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-07-22
+
+### Changed
+- **Wave-closing verify/format steps are relayed to the integrate-and-verify gate, not built by a worker.** The architect's `role: "verify"` label (a wave's closing format/lint/verify of its own work) now flows through design-panel to `execute-wave` instead of being stripped after wave-folding. In `execute-wave` it is an **advisory hint**: the Sonnet composer declares a `relay` list of such step idxs and hands them to the final Sonnet integrate-and-verify gate, which **performs** them against the *integrated* tree (formatter edits are staged into the wave's green squash) and returns a per-step verdict — rather than dispatching them to a builder/implementer whose isolated worktree cannot format the integrated tree. The composer keeps the final word and builds a step normally if it actually produces product code. `buildBatches` now treats a relayed idx as covered (not left uncovered) and refuses a declaration that both builds and relays an idx, or that relays every step.
+
 ## [0.7.0] - 2026-07-08
 
 ### Changed

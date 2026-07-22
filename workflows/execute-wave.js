@@ -65,6 +65,9 @@ const steps = RAW_STEPS.map((s, i) => {
     files: Array.isArray(s.files) ? s.files : [],
     change: s.change || "",
     verify: s.verify || "",
+    // Advisory hint from the architect: 'verify' marks a wave-closing verify/format/lint step.
+    // The composer decides whether to relay it to the final gate (it may override this).
+    role: s.role === "verify" ? "verify" : "deliverable",
     dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn.filter(Number.isInteger) : [],
     complexity: cx.status === "ok" ? cx.tier : null, // filled by the composer if "auto"
     _cx: cx,
@@ -167,6 +170,10 @@ const BATCHES_SCHEMA = {
         },
       },
     },
+    relay: {
+      type: "array", items: { type: "integer" },
+      description: "idx values of wave-CLOSING verify/format/lint steps to hand to the final integrate-and-verify gate INSTEAD of building — the gate performs them against the integrated tree and verdicts them. Treat each step's 'verify/format hint' as advisory: relay a step ONLY if its sole job is checking/formatting THIS wave's own work; if it builds product code, cover it in a job instead. A relayed idx must NOT also appear in any job.",
+    },
     rationale: { type: "string", description: "one line on the batching + tier calls" },
   },
 }
@@ -230,6 +237,15 @@ const buildBatches = picked => {
   const refuse = detail => ({ error: "execute-wave: composer declared invalid batches — REFUSING to run this wave rather than guessing the dispatch: " + detail + ". Re-invoke to retry the composer." })
   const batches = picked && Array.isArray(picked.batches) ? picked.batches : []
   if (batches.length === 0) return refuse("no batches were returned")
+  // Relayed steps (composer's judgement — the role hint is advisory): handed to the final
+  // gate instead of built. Keep only real idxs in this wave; a relayed idx is covered (does
+  // not need a job) but must NOT also appear in a job.
+  const relaySet = new Set()
+  const rawRelay = picked && Array.isArray(picked.relay) ? picked.relay.filter(Number.isInteger) : []
+  for (const idx of rawRelay) {
+    if (!byValue.has(idx)) return refuse("relay references idx " + idx + ", not a step in this wave")
+    relaySet.add(idx)
+  }
   const seen = new Set()
   const jobs = []
   for (let b = 0; b < batches.length; b++) {
@@ -243,21 +259,27 @@ const buildBatches = picked => {
       for (const idx of tasks) {
         if (!byValue.has(idx)) return refuse("batch " + (b + 1) + " references idx " + idx + ", not a step in this wave")
         if (seen.has(idx)) return refuse("idx " + idx + " is covered by more than one job")
+        if (relaySet.has(idx)) return refuse("idx " + idx + " is both built (in a job) and relayed to the gate")
         seen.add(idx); members.push(byValue.get(idx))
       }
       jobs.push(Object.assign(makeJob(members, maxTier(pick, ...members.map(floorOf))), { batch: b + 1 }))
     }
   }
-  const uncovered = steps.filter(s => !seen.has(s.idx)).map(s => s.idx)
-  if (uncovered.length) return refuse("wave idx " + uncovered.join(", ") + " left uncovered by any job")
-  return { jobs }
+  if (jobs.length === 0) return refuse("composer relayed every step to the gate — a wave must contain deliverable work to build")
+  // A step is covered if a job builds it OR the gate performs it (relay); anything else is a gap.
+  const uncovered = steps.filter(s => !seen.has(s.idx) && !relaySet.has(s.idx)).map(s => s.idx)
+  if (uncovered.length) return refuse("wave idx " + uncovered.join(", ") + " left uncovered by any job or relay")
+  return { jobs, relayIdxs: [...relaySet] }
 }
 
 // ─── Compose: MANDATORY — declare an ordered list of batches of parallel jobs AND tier each job.
 // Nothing to decide only when there's a single step whose tier is already set: it is its own job.
 const needCompose = steps.length > 1 || steps.some(s => s._cx.status === "auto")
 let jobs
+let relayIdxs = []
 if (!needCompose) {
+  // A single fixed-tier step is its own job — nothing to relay (a lone verify step is still
+  // built, since a wave must produce work; the composer only runs, and relays, for real waves).
   jobs = [Object.assign(makeJob([steps[0]], floorOf(steps[0])), { batch: 1 })]
 } else {
   phase("Compose")
@@ -266,16 +288,18 @@ if (!needCompose) {
     "Part of a larger task: " + TASK + "\n\n" +
     "Group this wave's tasks into an ORDERED list of BATCHES. Batches run in SEQUENCE, each dispatched onto the integrated result of the one before; the jobs inside a batch run in PARALLEL. Each job is ONE worker in ONE git worktree doing one or more tasks sequentially, in the order you list them. You are only PLANNING the dispatch; you do not implement anything.\n\n" +
     "Rules (obey exactly):\n" +
-    "- COVER every task's idx EXACTLY ONCE across all jobs. Never split a single task across jobs.\n" +
+    "- COVER every task's idx EXACTLY ONCE — either in a job (built by a worker) OR in `relay` (handed to the final gate). Never both, never neither. Never split a single task across jobs.\n" +
+    "- A wave-CLOSING verify/format/lint step (flagged 'Verify/format hint' below) is NOT built by a worker — a worker runs in an isolated worktree and cannot act on the INTEGRATED tree. Put its idx in `relay` so the final integrate-and-verify gate performs it against the merged tree. The hint is ADVISORY: relay it only if its sole job is checking/formatting THIS wave's own work; if it actually builds product code, cover it in a job instead.\n" +
     "- You have the FINAL word on order and execution. A task's 'Advisory dependency' below is the planner's suggestion — honour it when it is real, override it when it is not.\n" +
     "- Bias toward FEW jobs: MERGE sequential dependents that do NOT build on a prior PARALLEL fan-out into ONE worker, in dependency order; prefer grouping SIMILAR tasks together. Mixing tiers is fine — the merged job's tier is the MAX floor of its tasks (see the FLOOR rule below).\n" +
     "- INDEPENDENT tasks belong in the SAME batch as separate parallel jobs — EVEN IF they touch the same file. The integrator resolves same-file overlap; file overlap is NEVER a reason to serialise or merge — only tight dependency is.\n" +
     "- Start a LATER batch ONLY to build on a prior batch's integrated PARALLEL fan-out of TWO OR MORE jobs. A dependency on a SINGLE earlier job is NOT a batch boundary — fold the dependent into that same job.\n" +
     "- A task's current tier is a FLOOR: never tier a job BELOW any of its tasks' stated tiers. You may raise a blank/cheap task to its job's tier when you bundle it.\n" +
     SELECTION_PRINCIPLE + "\n\n" +
-    "Return `batches` in execution order — each { jobs: [ { tasks: [idx, ...], complexity } ] } — covering every idx below exactly once.\n\n" +
+    "Return `batches` in execution order — each { jobs: [ { tasks: [idx, ...], complexity } ] } — plus `relay` (idxs handed to the gate), together covering every idx below exactly once.\n\n" +
     steps.map(s => "### idx " + s.idx + " — " + s.title + " [tier: " + (floorOf(s) || "auto") + "]\n" +
       s.change + (s.files.length ? "\nFiles: " + s.files.join(", ") : "") + (s.verify ? "\nDone when: " + s.verify : "") +
+      (s.role === "verify" ? "\nVerify/format hint (advisory — you decide): looks like wave-closing verify/format work; relay it to the gate unless it actually builds product code" : "") +
       (s.deps.length ? "\nAdvisory dependency (planner's suggestion — you may override): idx " + s.deps.join(", ") : "")
     ).join("\n\n") + "\n\n" + COMMS,
     { label: "compose:w" + WAVE, phase: "Compose", model: "sonnet", schema: BATCHES_SCHEMA }
@@ -284,12 +308,21 @@ if (!needCompose) {
   const built = buildBatches(picked)
   if (built.error) return { error: built.error }
   jobs = built.jobs
+  relayIdxs = built.relayIdxs || []
   const batchCount = Math.max(...jobs.map(j => j.batch))
   log("wave " + WAVE + " composer declared " + batchCount + " batch(es), " + jobs.length + " job(s): " +
-      jobs.map(j => "b" + j.batch + ":" + j.label).join(", ") + (picked && picked.rationale ? " — " + picked.rationale : ""))
+      jobs.map(j => "b" + j.batch + ":" + j.label).join(", ") +
+      (relayIdxs.length ? " | relay to gate: idx " + relayIdxs.map(i => i + 1).join(", ") : "") +
+      (picked && picked.rationale ? " — " + picked.rationale : ""))
 }
 const jobByIdx = {}
 jobs.forEach(g => g.idxs.forEach(idx => { jobByIdx[idx] = g }))
+
+// Split the wave: job steps are built by workers; gate steps (the composer's relay) are
+// performed by the final integrate-and-verify gate against the integrated tree.
+const gateIdxs = new Set(relayIdxs)
+const gateSteps = steps.filter(s => gateIdxs.has(s.idx))
+const jobSteps = steps.filter(s => !gateIdxs.has(s.idx))
 
 // ─── Tier routing ───
 const TIER = {
@@ -415,7 +448,9 @@ for (let batch = 1; batch <= maxBatch && !abort; batch++) {
 const reportByIdx = {}
 jobs.forEach((g, k) => { const r = impls[k] || "(no report returned)"; g.idxs.forEach(idx => { reportByIdx[idx] = r }) })
 const implReport = idx => reportByIdx[idx] || "(no report returned)"
-log("wave " + WAVE + ": " + steps.length + " step(s) in " + jobs.length + " worker(s)" + (useWorktrees ? " (isolated worktree each)" : " (shared tree, no git)"))
+log("wave " + WAVE + ": " + jobSteps.length + " step(s) in " + jobs.length + " worker(s)" +
+    (gateSteps.length ? " + " + gateSteps.length + " gate step(s) relayed to verify" : "") +
+    (useWorktrees ? " (isolated worktree each)" : " (shared tree, no git)"))
 
 // A non-final batch integrator crashed / hit an unresolvable conflict / returned no valid tip: STOP —
 // do not dispatch or verify further. Preserve the results + integration shape so the coordinator's
@@ -423,13 +458,17 @@ log("wave " + WAVE + ": " + steps.length + " step(s) in " + jobs.length + " work
 if (abort) {
   const at = " — wave aborted at batch " + abort.batch + " (" + abort.reason + ")"
   const results = steps.map(s => {
+    const isGate = gateIdxs.has(s.idx)
     const g = jobByIdx[s.idx]
-    log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierOf(g).name + "] (" + s.title + "): unknown" + at)
+    const tierName = isGate ? "gate" : tierOf(g).name
+    log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierName + "] (" + s.title + "): unknown" + at)
     return {
-      step: s.title, wave: WAVE, tier: tierOf(g).name, worktree: useWorktrees,
-      implemented: implReport(s.idx),
+      step: s.title, wave: WAVE, tier: tierName, worktree: useWorktrees,
+      implemented: isGate ? "(folded into integrate & verify gate)" : implReport(s.idx),
       verdict: "unknown", evidence: "",
-      problems: (g.batch <= abort.batch ? "implemented but not verified" : "not dispatched") + at,
+      problems: (isGate
+        ? "gate step not performed (wave aborted before integrate & verify)"
+        : (g.batch <= abort.batch ? "implemented but not verified" : "not dispatched")) + at,
       integrationConflict: abort.files,
     }
   })
@@ -446,7 +485,7 @@ if (abort) {
 
 // ─── Integrate & verify (one Sonnet agent: merge the final batch, then verify the whole wave) ───
 
-const stepBlocks = steps.map(s => {
+const stepBlocks = jobSteps.map(s => {
   const g = jobByIdx[s.idx]
   const mates = g.idxs.filter(i => i !== s.idx)
   const mate = mates.length ? "\n(Built in one worker alongside step(s): " + mates.map(i => i + 1).join(", ") + ")" : ""
@@ -455,6 +494,27 @@ const stepBlocks = steps.map(s => {
     (s.files.length ? "\nFiles: " + s.files.join(", ") : "") + mate +
     "\nImplementer reported:\n" + implReport(s.idx)
 }).join("\n\n")
+
+// Gate (relayed) steps: wave-closing verify/format/lint the composer handed to this gate
+// instead of a worker. The verifier PERFORMS them against the integrated tree and verdicts them.
+const gateBlocks = gateSteps.map(s =>
+  "### idx " + s.idx + " — " + s.title + " (wave-closing verify/format)\n" +
+  "Action to PERFORM against the integrated tree: " + s.change +
+  (s.verify ? "\nDone when: " + s.verify : "") +
+  (s.files.length ? "\nFiles: " + s.files.join(", ") : "")
+).join("\n\n")
+const gatePart = gateSteps.length
+  ? "\n## Wave-closing verification & formatting — PERFORM these, then a verdict for each\n" +
+    "The step(s) below are this wave's OWN closing verify/format/lint work. They were deliberately NOT given to a worker — a worker runs in an isolated worktree and cannot act on the INTEGRATED tree. YOU perform them now against the integrated tree" +
+    (useWorktrees ? ", from the main working tree, AFTER the Part A merge and BEFORE the GREEN squash below" : "") + ":\n" +
+    "- Run each formatter/lint/verification action listed." +
+    (useWorktrees ? " A formatter WILL modify files; run `git add -A` after formatting so those edits are STAGED and get captured by the wave's single GREEN squash commit below." : " A formatter's edits simply remain in the working tree (no git here — do not stage or commit).") + "\n" +
+    "- Run each check and quote the shortest decisive line of its output.\n" +
+    "- Return a verdict for EACH gate idx below (in the same `results` array): `pass` when it succeeded and left the tree green; `needs-changes`/`fail` on problems; `blocked` if genuinely undeterminable. A non-`pass` gate verdict makes the wave NOT GREEN" +
+    (useWorktrees ? " — do not squash." : ".") + "\n" +
+    "- Perform each action ONCE, here, at the final gate.\n\n" +
+    gateBlocks + "\n"
+  : ""
 
 // Final-batch split: earlier batches were already integrated by their per-batch integrators (kept
 // worktrees), only the final batch's branches remain to merge here.
@@ -527,6 +587,7 @@ const wave = await safeAgent(
   "This is part of a larger task: " + TASK + "\n\n" +
   integratePart +
   "\nAll the step(s) below are now in the current working tree. Check EACH against its STATED intent, sceptically — and look for interactions BETWEEN them that a per-file review would miss (an assumption that holds in one step but not once another lands). Prefer evidence: run the relevant build/test/lint once if cheap and quote the shortest decisive line.\n" +
+  gatePart +
   greenBlock +
   greenBarLine +
   "Return a verdict PER STEP, keyed by the given idx. If you genuinely CANNOT determine a step's outcome — you cannot tell what it INTENDED, or the evidence is inconclusive either way — give THAT step the verdict 'blocked' and put your QUESTION/BLOCKER text verbatim in its `problems` (what you checked and exactly what you could not resolve). 'blocked' is a legitimate outcome, never a fabricated pass/fail — and never answer in prose instead of the structured output. An unresolvable MERGE conflict is a different channel: it goes in the top-level `conflict` field, not a step verdict. Any 'blocked' step means the wave is NOT GREEN: do not squash, leave the worktrees.\n\n" +
@@ -577,11 +638,14 @@ if (!useWorktrees && !wave) integration = { merged: 0, conflict: (agentCrash ? "
 const conflict = useWorktrees && conflicted(integration) ? integration.conflict : undefined
 const results = steps.map(s => {
   const v = verdByIdx[s.idx]
+  const isGate = gateIdxs.has(s.idx)
   const g = jobByIdx[s.idx]
-  log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierOf(g).name + "] (" + s.title + "): " + (v ? v.verdict : "unknown"))
+  const tierName = isGate ? "gate" : tierOf(g).name
+  log("step " + (s.idx + 1) + "/" + TOTAL + " [" + tierName + "] (" + s.title + "): " + (v ? v.verdict : "unknown"))
   return {
-    step: s.title, wave: WAVE, tier: tierOf(g).name, worktree: useWorktrees,
-    implemented: implReport(s.idx), verdict: v ? v.verdict : "unknown", evidence: v ? (v.evidence || "") : "", problems: v ? (v.problems || "") : "",
+    step: s.title, wave: WAVE, tier: tierName, worktree: useWorktrees,
+    implemented: isGate ? "(folded into integrate & verify gate)" : implReport(s.idx),
+    verdict: v ? v.verdict : "unknown", evidence: v ? (v.evidence || "") : "", problems: v ? (v.problems || "") : "",
     integrationConflict: conflict,
   }
 })

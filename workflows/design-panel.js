@@ -105,7 +105,7 @@ const PLAN_SCHEMA = {
           confidence: { enum: ["low", "medium", "high"], description: "how settled this step is — 'low' flags a shaky step (uncertain change, unresolved detail) so the integrator and coordinator can scrutinise it" },
           wave: { type: "integer", description: "1-based wave number. A wave is a self-contained GREEN milestone; same-wave steps MAY depend on each other, but every intra-wave dependency MUST be declared via dependsOn; the executor resolves dispatch (parallel, merged, or chained). Later waves build on earlier waves' integrated result." },
           dependsOn: { type: "array", items: { type: "string" }, description: "ids of steps this step builds on — same or EARLIER wave only, never later; same-wave dependencies are resolved downstream by the dispatch composer (merge into one worker or chain workers)" },
-          role: { enum: ["deliverable", "verify"], description: "'verify' ONLY for a step whose sole job is verification/formatting/lint of THIS wave's own work; everything else is 'deliverable' (default when omitted). A wave of only 'verify' steps is not allowed — verify is a wave's CLOSING step, never a whole wave; mislabelling a deliverable step 'verify' risks it being folded away." },
+          role: { enum: ["deliverable", "verify"], description: "'verify' ONLY for a step whose sole job is verification/formatting/lint of THIS wave's own work; everything else is 'deliverable' (default when omitted). A wave of only 'verify' steps is not allowed — verify is a wave's CLOSING step, never a whole wave; a 'verify' step is a HINT that execute-wave relays to the wave's integrate-and-verify gate (performed against the integrated tree) instead of building it, so mislabelling a deliverable step 'verify' risks it being relayed rather than built." },
           verify: { type: "string", description: "how to confirm this step is correct" },
         },
       },
@@ -250,6 +250,7 @@ const steps = rawSteps.map((s, i) => ({
   complexity: TIERS.includes(s.complexity) ? s.complexity : "mechanical",
   confidence: ["low", "medium", "high"].includes(s.confidence) ? s.confidence : undefined,
   wave: Number.isInteger(s.wave) && s.wave > 0 ? s.wave : 1,
+  role: s.role === "verify" ? "verify" : "deliverable",
   verify: s.verify || "",
   dependsOn: [],
 }))
@@ -328,8 +329,10 @@ if (droppedEdges.length) {
 // ─── Enforce wave invariants ───
 // A wave must deliver real work: a wave made up entirely of verify/format-only steps
 // is not a milestone, so fold it into a neighbouring deliverable wave (the nearest
-// EARLIER one, else the nearest later). Role is author-facing only — read it off the
-// raw step, defaulting to 'deliverable' when omitted.
+// EARLIER one, else the nearest later). `role` is read off the raw step here (defaulting
+// to 'deliverable' when omitted) for the fold; it is ALSO emitted on the returned step
+// above and acted on downstream — execute-wave relays a 'verify' step to the wave's
+// integrate-and-verify gate instead of building it.
 const roleOf = i => (rawSteps[i] && rawSteps[i].role === "verify") ? "verify" : "deliverable"
 const wavesInPlan = [...new Set(steps.map(s => s.wave))].sort((a, b) => a - b)
 const deliverableWaves = new Set(wavesInPlan.filter(w => steps.some(s => s.wave === w && roleOf(s.idx) === 'deliverable')))

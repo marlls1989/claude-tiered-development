@@ -131,9 +131,10 @@ Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPl
 
 It returns `{ design, plan, waves, greenBar }` — `design` is `{ recommendation,
 rationale, risks }`; `plan` is an array of steps, each `{ idx, title, files, change,
-complexity, wave, verify, dependsOn, confidence? }` (complexity ∈ `menial`|`mechanical`|
-`substantive`; `dependsOn` is an array of prerequisite step `idx` values; `confidence`
-∈ `low`|`medium`|`high`, optional). A `low` `confidence` on a step flags a shaky part
+complexity, wave, role, verify, dependsOn, confidence? }` (complexity ∈ `menial`|`mechanical`|
+`substantive`; `role` ∈ `deliverable`|`verify`, where a `verify` step is a wave's closing
+format/lint/verify of its own work; `dependsOn` is an array of prerequisite step `idx` values;
+`confidence` ∈ `low`|`medium`|`high`, optional). A `low` `confidence` on a step flags a shaky part
 of the plan — scrutinise it at the step-3 gate rather than waving it through. Waves are
 COMPLETE, GREEN, DELIVERABLE slices — green per the project's own rules, carried in
 `greenBar` — and same-wave steps may be dependent and share files, with every
@@ -181,7 +182,12 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
   It prefers **few workers**: sequential dependents that do not build on a parallel
   fan-out merge into one worker (mixing tiers freely — the merged job's tier is the
   **max floor** of its steps), and a later batch starts **only** to build on a prior
-  batch's integrated parallel fan-out.
+  batch's integrated parallel fan-out. A step's `role: "verify"` is an **advisory
+  hint**: the composer may **relay** such a wave-closing verify/format/lint step to
+  the final integrate-and-verify gate — which performs it against the *integrated*
+  tree and returns its verdict — instead of dispatching it to a worker (a worker's
+  isolated worktree can't format the integrated tree); the composer has the final
+  word and builds it as a normal step if it actually produces product code.
 - `isGit` is your first probe result; `totalSteps` is the whole plan's step count
   (for nicer labels).
 - `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's
