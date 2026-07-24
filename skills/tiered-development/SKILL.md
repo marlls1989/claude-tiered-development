@@ -30,7 +30,8 @@ matters.
     your context and duplicates the workforce's job. The only commands you run are
     orchestration: probing `git rev-parse --is-inside-work-tree` for `isGit` and
     `git rev-parse HEAD` for a wave's `baseRef`, and the final integration
-    commit/push.
+    commit/push. The one file you read directly is `GUIDELINES.md` (step 0) — you
+    forward it verbatim rather than reason about it, so it costs you nothing to hold.
   - **`tiered-development:builder` (Opus)** — the primary implementer, launched
     fresh per substantive step so each gets a clean, focused context.
   - **Default thinking tier** for `architect` / `deep-reviewer`, and the **default
@@ -85,6 +86,34 @@ dispatch fails.
 
 ## The protocol
 
+### 0. Load the project's guidelines — once, at the start
+
+Read `GUIDELINES.md` at the repository root if it exists (one `Read`; this is the
+one file you read directly rather than via a `reader`, because you forward it
+rather than reason about it). It holds the project's **standing rules** — global
+requirements, conventions, practices that hold for every task in this repo — so
+that you never have to restate them per worker. Pass its contents **verbatim** as
+the `guidelines` argument to `design-panel`, every `execute-wave`, and
+`review-panel`; each workflow injects them into every architect, worker,
+integrator and reviewer it spawns. Do not paraphrase, trim, or "apply" them
+yourself — forwarding the file *is* the mechanism.
+
+If the file does not exist, omit the argument and carry on. When the user states
+a standing rule mid-session ("always do X in this project"), offer to add it to
+that file so it survives into later sessions; a rule that only applies to the
+task at hand belongs in the step's own instructions instead. See
+`project-guidelines.md` next to this file for the format and what belongs there.
+
+**A guideline is a hard requirement.** Agents are told they may not decide to break
+one: if a task cannot be done without violating a guideline, they STOP and return a
+`BLOCKER` naming it. **You cannot authorise that yourself** — this is the one
+escalation you never resolve on your own context, however obvious the answer looks.
+Take it to the user with the agent's justification intact (the guideline, the exact
+conflict, why there is no compliant route, what the agent would do if authorised),
+and only continue once they have decided. If they authorise it, say so explicitly in
+the re-dispatched step's instructions; if the guideline is simply wrong, the fix is
+to change `GUIDELINES.md`, not to wave the step through.
+
 ### 1. Brainstorm a rough plan — WITH the user
 
 Draft the approach and a rough set of steps *together with the user*. Use
@@ -104,7 +133,7 @@ under plan mode, so entering it here makes the step-3 approval gate
 harness-enforced (no edit can slip through before the user says go):
 
 ```
-Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })
+Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, guidelines, panelModels, integratorModel } })
 ```
 
 - `level` is `quick` | `standard` | `deep` — sets the plan's step budget. Scale it to the task.
@@ -131,9 +160,10 @@ Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPl
 
 It returns `{ design, plan, waves, greenBar }` — `design` is `{ recommendation,
 rationale, risks }`; `plan` is an array of steps, each `{ idx, title, files, change,
-complexity, wave, verify, dependsOn, confidence? }` (complexity ∈ `menial`|`mechanical`|
-`substantive`; `dependsOn` is an array of prerequisite step `idx` values; `confidence`
-∈ `low`|`medium`|`high`, optional). A `low` `confidence` on a step flags a shaky part
+complexity, wave, role, verify, dependsOn, confidence? }` (complexity ∈ `menial`|`mechanical`|
+`substantive`; `role` ∈ `deliverable`|`verify`, where a `verify` step is a wave's closing
+format/lint/verify of its own work; `dependsOn` is an array of prerequisite step `idx` values;
+`confidence` ∈ `low`|`medium`|`high`, optional). A `low` `confidence` on a step flags a shaky part
 of the plan — scrutinise it at the step-3 gate rather than waving it through. Waves are
 COMPLETE, GREEN, DELIVERABLE slices — green per the project's own rules, carried in
 `greenBar` — and same-wave steps may be dependent and share files, with every
@@ -165,7 +195,7 @@ ascending order, **re-probe `git rev-parse HEAD`** to get the current branch tip
 run:
 
 ```
-Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, greenBar } })
+Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, greenBar, guidelines } })
 ```
 
 - `steps` is just this wave's steps (filter the plan by `wave`). Each carries a
@@ -182,6 +212,35 @@ Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, i
   fan-out merge into one worker (mixing tiers freely — the merged job's tier is the
   **max floor** of its steps), and a later batch starts **only** to build on a prior
   batch's integrated parallel fan-out.
+- **Batches are carried forward off your working branch.** A batch of a *single* job
+  needs no integration at all — that job's commit already *is* the batch's result, so
+  its sha becomes the next batch's base directly and no integrator is spawned. A batch
+  that fanned out to two or more jobs gets a Sonnet integrator that merges them **in
+  its own worktree**. Your working branch is therefore untouched for the whole wave
+  until the final integrate-and-verify pass lands it in one squashed commit. A step's `role: "verify"` is an **advisory
+  hint**: the composer may **relay** such a wave-closing verify/format/lint step to
+  the final integrate-and-verify gate — which performs it against the *integrated*
+  tree and returns its verdict — instead of dispatching it to a worker (a worker's
+  isolated worktree can't format the integrated tree); the composer has the final
+  word and builds it as a normal step if it actually produces product code. The gate
+  performs a relayed step **last** — after verifying every built step and diffing
+  against the worker branches, immediately before the squash — and skips it entirely
+  when the wave is already not green, so a formatter never leaves rewritten-but-
+  uncommitted files in your tree.
+- Each worker runs a **scoped self-check before it commits** — it compiles, the tests
+  covering its slice pass, its code is formatted. That is deliberately *minimal*, not
+  verification: the integrate-and-verify gate still owns the full `greenBar`, the
+  cross-step interactions and the adversarial checking. A worker whose slice does **not**
+  stand alone commits anyway and **declares** it with a `RED-COMMIT:` marker giving why
+  it is red and the expected resolution — what makes it green and where that comes from.
+  The reasons are open-ended; what is required is the account, not a category. Two reds
+  are never a worker's to fix and are declared rather than repaired: a check already red
+  on `baseRef`, and one that cannot run inside an isolated worktree at all. The gate then
+  checks the declaration against reality on the integrated tree, so every red it meets is
+  either explained and confirmed resolved, or a real problem — never unexplained. A
+  resolution a worker defers **beyond** this wave means the wave cannot close green, and
+  the verifier says so — treat that as a signal to re-plan the wave boundary, not as a
+  broken step.
 - `isGit` is your first probe result; `totalSteps` is the whole plan's step count
   (for nicer labels).
 - `baseRef` is the current `HEAD` sha you just probed. The harness cuts each worker's
@@ -232,7 +291,19 @@ this is why you call it per wave rather than handing over the whole plan:**
   targeted fix-up: re-dispatch that one step as its own single-step wave via
   `tiered-development:execute-wave`, escalating its tier (send it to
   `tiered-development:architect` if the fix needs a design decision), and re-verify
-  before moving on.
+  before moving on. **Never do this for a gate step** (`tier` is `gate` — a relayed
+  `role: "verify"` step), whatever its verdict: it has no worker to re-dispatch to, and
+  sending it back as its own single-step wave either hands a formatter to a worker in an
+  isolated worktree — the exact thing the relay exists to prevent — or is refused as a
+  wave with nothing to build. If a gate step reports *not performed*, fix the step that
+  actually failed. If it reports a real failure (the formatter errored, lint genuinely
+  failed), fix the underlying cause and **re-run the whole wave**, whose gate performs it
+  again against the fresh integrated tree.
+- A worker's `RED-COMMIT:` declaration travels verbatim in that step's `implemented`
+  report. The verifier already judges it, but collect these too — several in one wave
+  tell you how tightly the plan split a single change across parallel jobs. That is
+  legitimate by design, but it is also where integration risk concentrates, so it is
+  worth knowing before you plan the next wave.
 - If `integration.conflict` is not `none` **or** `integration.failed` is set, stop
   and inspect. The integrator/verifier resolves conflicts in place, so a surfaced
   `conflict` is one it could **not** safely resolve — the wave's steps overlapped in
@@ -247,9 +318,10 @@ this is why you call it per wave rather than handing over the whole plan:**
   conflict *was* auto-resolved — the verifier scrutinises those, but they don't stop
   the wave.) On a green wave `integration.squashed` is set and `integration.summary`
   holds the one-line message of the single commit the wave was collapsed into. A
-  multi-batch wave that aborts mid-batch leaves the earlier batches' integrated
-  commits on your working branch un-squashed — `integration.conflict`/`failed` flags
-  it; inspect before continuing.
+  multi-batch wave that aborts mid-batch leaves your working branch **untouched**
+  (`integration.merged` is 0): every batch is carried forward off-branch and only the
+  final integrate-and-verify pass lands the wave, so there is nothing to unwind —
+  inspect what `integration.conflict`/`failed` reports and re-run the wave.
 - If a step you routed to Sonnet turns out to need judgement, re-route it to a
   `tiered-development:builder` rather than accepting a guessed result.
 
@@ -269,7 +341,7 @@ having to rediscover them. Two ways, scale to the change:
 - **Deep / high-stakes** — `tiered-development:review-panel`, mirroring design-panel:
 
   ```
-  Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, reviewModels, integratorModel } })
+  Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, guidelines, reviewModels, integratorModel } })
   ```
 
   `reviewModels` (1–5 of `"opus"`/`"fable"`/`"sonnet"`) fans out reviewers on distinct

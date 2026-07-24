@@ -59,6 +59,9 @@ loop over the whole change.
 `tiered-development` — the **gated coordination** skill, and the single entry
 point. The Opus coordinator:
 
+0. **loads the project's `GUIDELINES.md`** (if the repo has one) and forwards it
+   verbatim to every workflow, so each agent it spawns gets the project's standing
+   rules without the coordinator relaying them by hand,
 1. **brainstorms a rough plan _with you_** (via `superpowers:brainstorming`,
    grounding the discussion with `reader` agents),
 2. hands that rough plan to the **`design-panel`** workflow, where an architect (or
@@ -73,6 +76,25 @@ point. The Opus coordinator:
 
 Invoke with `/tiered-development` or by describing the intent ("design and build X
 the tiered way").
+
+### Project guidelines (`GUIDELINES.md`)
+
+Drop a `GUIDELINES.md` at your repository root and every agent that designs, writes
+or judges code gets it, verbatim, in its prompt — architects, builders, implementers,
+integrators and reviewers alike (the composers, which only pick models and batches,
+do not). It is where a project's **standing** rules belong: global
+requirements, conventions a fresh agent cannot infer from the code, practices that
+must hold, traps specific to the repo. Because it is a committed file it persists
+across sessions and is reviewed like any other project decision, which is the point
+— the coordinator stops re-relaying the same rules every task.
+
+Guidelines are **hard requirements**, and no agent may decide to break one. If a task
+cannot be done without violating a guideline, that is a `BLOCKER`: the agent stops
+rather than shipping a violating version, and the coordinator escalates to **you** —
+a violation is a last resort that you authorise, with a stated justification, never a
+call a worker makes and mentions afterwards. See
+`skills/tiered-development/project-guidelines.md` for the format and what to keep out
+of it; this repo's own `GUIDELINES.md` is a worked example.
 
 ### Workflows (`workflows/`)
 
@@ -94,21 +116,39 @@ Fable sparingly.
   including to an explicit Sonnet — via `integratorModel`; it is never
   auto-defaulted below Opus. A stuck integrator climbs a `sonnet → opus → fable`
   escalation ladder. Called as
-  `Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, panelModels, integratorModel } })`;
-  returns `{ design, plan, waves, greenBar }` — steps carry explicit `dependsOn`
-  and an optional per-step `confidence` (low/medium/high), and waves are
-  complete, green, deliverable slices.
+  `Workflow({ name: "tiered-development:design-panel", args: { level, task, roughPlan, guidelines, panelModels, integratorModel } })`;
+  returns `{ design, plan, waves, greenBar }` — steps carry explicit `dependsOn`,
+  a `role` (`deliverable`, or `verify` for a wave's closing format/lint/verify of
+  its own work) and an optional per-step `confidence` (low/medium/high), and waves
+  are complete, green, deliverable slices.
 - **`execute-wave`** — runs one wave: a **mandatory** Sonnet composer **owns
   dispatch**, grouping the wave's steps into worker assignments and tiering each
   (substantive → Opus `builder`, mechanical → Sonnet, menial → Haiku `implementer`);
   independent workers run in parallel, while coupled steps are merged into one
-  worker or chained across stages, each stage integrated onto the working branch
-  before the next starts so chained workers build on their prerequisites'
-  committed result — an explicit `complexity` remains a floor. Each assignment
-  runs in **its own git worktree**; then a **single** Sonnet `verifier` merges the
-  wave's branches back — resolving any conflict in place — checks all the wave's
-  steps against the integrated tree, and on a **green** wave squashes it into one
-  summary commit. Worktrees are used for **every** assignment in a git repo — even
+  worker or chained across batches, each batch carried forward **off** the working
+  branch so chained workers build on their prerequisites' committed result — a
+  single-job batch needs no integration at all (its one commit *is* the batch
+  result, passed straight on as the next batch's base), and a batch that fanned out
+  gets an integrator that merges **in its own worktree**. An explicit `complexity`
+  remains a floor. Each assignment
+  runs in **its own git worktree** and runs a **scoped self-check before it
+  commits** — compiles, the tests covering its slice, formatting. That is minimal by
+  design, not verification: the integrate-and-verify gate keeps the full green bar,
+  the cross-step interactions and the adversarial checking. The point is attribution,
+  so that any red the gate meets in the *merged* tree comes from **integration**
+  rather than from a slice handed over broken. A
+  slice that does **not** stand alone is committed anyway and **declared** with a
+  `RED-COMMIT:` marker giving why it is red and the expected resolution — what makes it
+  green and where that comes from. The reasons are open-ended; the account is what is
+  required, not a category. The
+  verifier then checks that declaration against the integrated tree. Then a **single**
+  Sonnet `verifier` merges the wave's branches back — resolving any conflict in
+  place — checks all the wave's steps against the integrated tree, **performs** any
+  wave-closing verify/format step the composer relayed to it (last, against the
+  integrated tree, since a worker's isolated worktree cannot format it), and on a
+  **green** wave squashes it into one summary commit. That final pass is the *only*
+  thing that touches your working branch all wave, so a wave that aborts partway
+  leaves it untouched — nothing to unwind, just re-run. Worktrees are used for **every** assignment in a git repo — even
   a single sequential one — so the workers' in-progress edits never flood the
   coordinator's language server with false diagnostics; outside git it falls back
   to sequential edits in the shared tree.
@@ -116,7 +156,7 @@ Fable sparingly.
   branch, not the checked-out one — so `baseRef` (the current HEAD, re-probed each
   wave) is what carries the checked-out branch and prior waves' results to the
   workers. Called as
-  `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, greenBar } })`
+  `Workflow({ name: "tiered-development:execute-wave", args: { task, wave, steps, isGit, totalSteps, baseRef, greenBar, guidelines } })`
   once per wave.
 - **`review-panel`** — the deep final review: a fan-out of reviewers (each on a
   distinct lens, Sonnet admissible on a lighter lens) closed by an integrator
@@ -124,7 +164,7 @@ Fable sparingly.
   `integratorModel` mirror `design-panel`'s doctrine (Opus-default integrator,
   escalating to Fable on high integration difficulty, overridable incl.
   Sonnet, with the same `sonnet → opus → fable` stuck-integrator ladder).
-  Called as `Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, reviewModels, integratorModel } })`;
+  Called as `Workflow({ name: "tiered-development:review-panel", args: { level, task, design, changed, files, guidelines, reviewModels, integratorModel } })`;
   returns `{ review: { verdict, evidence, problems, blocker } }` — `problems`
   is an array of `{ point, confidence? }` entries, and `blocker` carries the
   verbatim QUESTION/BLOCKER text for a `blocked` verdict.

@@ -25,7 +25,7 @@ but succinct — caveman-style: cut the fluff, keep every technical fact.
 - Error strings, exact and whole.
 - Commands, identifiers, file paths, API names.
 - Verdict keywords: `pass` / `needs-changes` / `fail`.
-- The markers `BLOCKER` and `QUESTION`.
+- The markers `BLOCKER`, `QUESTION` and `RED-COMMIT`.
 
 ## Auto-clarity carve-out
 
@@ -34,6 +34,10 @@ Compression serves the coordinator; it must never cause a misread. Write these
 
 - A `BLOCKER` / `QUESTION` explanation and the choices in a surfaced ambiguity —
   the coordinator (or the user) decides from your words; make them unambiguous.
+- A `RED-COMMIT` justification — the criteria you ran, the failing output, why it is
+  red, and the expected resolution. The gate re-runs exactly what you name on the
+  integrated tree and decides from exactly these words whether the red was explained
+  or broken.
 - Any security warning or irreversible-action caveat.
 - A multi-step sequence where dropped conjunctions or order would risk a misread.
 

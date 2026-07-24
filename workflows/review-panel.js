@@ -1,7 +1,7 @@
 export const meta = {
   name: "review-panel",
   description: "Deep final review of a completed change: a fan-out of reviewers (each on a distinct lens) closed by an integrator that merges them into ONE verdict (most severe wins). By default a cheap Sonnet composer picks the composition — Sonnet is admissible on lighter lenses; the coordinator overrides via reviewModels — a single Sonnet/Opus/Fable reviewer, a mixed panel, or the two-tier pattern (a panel then a separate final verdict) — only when the user asks for a specific one. The integrator tier is deferred: it defaults to Opus and escalates to Fable when the panel reports high integration difficulty, then climbs the tier ladder if it gets stuck. Mirrors design-panel; called for the whole-change gate after per-wave verification.",
-  whenToUse: "Invoked by the tiered-development skill for a deep final review. Pass args as an object: { level, task, design, changed, files?, reviewModels?, integratorModel? } — reviewModels is a 1–5 array of 'opus'/'fable'/'sonnet'; integratorModel ('opus'|'fable'|'sonnet') merges the panel into the final verdict, defaulting to Opus (escalating to Fable on high integration difficulty) when omitted. Omit them to let a Sonnet composer choose. Returns { level, review: { verdict, evidence, problems, blocker }, candidates }.",
+  whenToUse: "Invoked by the tiered-development skill for a deep final review. Pass args as an object: { level, task, design, changed, files?, guidelines?, reviewModels?, integratorModel? } — reviewModels is a 1–5 array of 'opus'/'fable'/'sonnet'; integratorModel ('opus'|'fable'|'sonnet') merges the panel into the final verdict, defaulting to Opus (escalating to Fable on high integration difficulty) when omitted. Omit them to let a Sonnet composer choose. Returns { level, review: { verdict, evidence, problems, blocker }, candidates }.",
   phases: [
     { title: "Compose", detail: "Only when the composition is unspecified: a Sonnet composer picks the reviewer models", model: "sonnet" },
     { title: "Review", detail: "Reviewer(s) (Sonnet, Opus and/or Fable), each on a distinct lens, review the change against its intent" },
@@ -17,6 +17,10 @@ const LEVEL = ["quick", "standard", "deep"].includes(A.level) ? A.level : "stand
 const TASK = typeof A.task === "string" ? A.task.trim() : ""
 const DESIGN = typeof A.design === "string" ? A.design.trim() : ""
 const CHANGED = typeof A.changed === "string" ? A.changed.trim() : ""
+// Standing, project-wide rules the coordinator forwards verbatim from the project's guidelines file
+// (`GUIDELINES.md`) so it never has to restate them per task. Injected into
+// every agent that designs, writes, or judges code — never summarised, since they are requirements.
+const GUIDELINES = typeof A.guidelines === "string" ? A.guidelines.trim() : ""
 const FILES = Array.isArray(A.files) ? A.files : []
 if (!TASK) return { error: "No task given. Pass args as { level, task, design, changed }." }
 
@@ -56,6 +60,12 @@ const safeAgent = async (prompt, opts) => {
 
 // ─── Shared prompt fragments ───
 const COMMS = `Comms: your final message is DATA returned to the coordinator, not prose for a human. Return only the structured output — no preamble, no restating this prompt. Cut filler/hedging/praise. path:line on every code claim; quote the shortest decisive line of any command output. Keep verbatim: error strings, commands, identifiers, the verdict keywords (pass/needs-changes/fail/blocked), and the markers BLOCKER/QUESTION. Never compress a BLOCKER/QUESTION explanation or a security caveat — spell those out plainly. See skills/tiered-development/comms-protocol.md.`
+const GUIDELINES_BLOCK = GUIDELINES
+  ? "\n\n## Project guidelines — standing rules for this repository\n" +
+    "These come from the project's committed GUIDELINES.md and apply to EVERY task here, not only this one. They are HARD REQUIREMENTS: follow them as written, and do not ask the coordinator to repeat them.\n" +
+    "You may NOT decide to break one. If your instructions above cannot be carried out without violating a guideline, that is a BLOCKER, not a judgement call: STOP, do NOT implement a violating version, and report it through your ask-back channel — name the guideline, state exactly what conflicts with it, why you can see no compliant way to do the task, and what you would do if authorised. Only the USER authorises a violation, via the coordinator. A violation is a last resort someone else signs off, never a call you make and mention afterwards.\n\n" +
+    GUIDELINES + "\n\n— end of project guidelines —\n"
+  : ""
 const LENSES = ["subtle correctness & logic", "architectural coherence & cross-module interactions", "security, error paths, resource handling & partial failure", "tests & coverage", "scope, simplicity & YAGNI"]
 const contextBlock =
   "Task: " + TASK + "\n\n" +
@@ -99,7 +109,7 @@ const reviewPrompt = lens =>
   "Review against the STATED intent, not just what the diff happens to do. A change that builds and passes per-step checks but does the wrong thing, or the right thing in a way that breaks something else, is a failure. Prefer evidence — run the relevant tests/build/lint if the repo supports it and quoting the output is cheap; never suppress output through tail/head/grep. Cite path:line for every concrete claim.\n\n" +
   "Return: VERDICT (pass/needs-changes/fail/blocked — use blocked ONLY when you genuinely cannot determine the verdict: unclear intent or genuinely inconclusive evidence; put your QUESTION/BLOCKER text verbatim in `blocker`, NOT in problems), the evidence, and each concrete problem as an entry in the problems array (most important first; a `point` per problem, empty array when there are none)." +
   (lens ? " You are one of several reviewers whose verdicts an integrator will merge, so ALSO give each problem a `confidence` (low/medium/high) and set `integrationDifficulty` (low/medium/high) with a one-line `integrationDifficultyReason` — how hard your findings will be to reconcile with the other lenses'." : "") +
-  " Your final output is the mandatory StructuredOutput call — never answer in prose in its place.\n\n" + COMMS
+  " Your final output is the mandatory StructuredOutput call — never answer in prose in its place.\n\n" + GUIDELINES_BLOCK + "\n\n" + COMMS
 
 // ─── Compose: pick the reviewer composition when the coordinator did not ───
 let compositionRationale = ""
@@ -171,7 +181,7 @@ if (candidates.length > 1) {
     "## Integrate the panel into ONE final verdict\n" + contextBlock +
     "You have " + candidates.length + " independent review(s) of this change. The panel has ALREADY reviewed it — TRUST their findings and do NOT re-review the change from scratch. Merge them into ONE verdict: the overall verdict is the MOST SEVERE present — `fail` beats `needs-changes` beats `pass`. Consolidate and de-duplicate the problems into the problems array (each an entry with a `point`, most important first), carrying each source problem's `confidence` through; SCRUTINISE and DOWN-WEIGHT low-confidence items — verify a low-confidence claim yourself if cheap before keeping it, and drop the ones that do not hold up. Adjudicate ONLY where reviewers DISAGREE — one makes a claim another refutes; drop any claim a later reviewer convincingly refuted. When adjudicating such a DISPUTED claim you may verify that specific claim yourself if it is cheap — this is not a licence for blanket re-verification.\n\n" +
     "A reviewer 'blocked' means it genuinely COULD NOT determine the verdict — its QUESTION is in that reviewer's `blocker`; RESOLVE it yourself from the candidates/cheap verification under the adjudication licence above where you can, and give the merged verdict 'blocked' ONLY when it stays genuinely unresolved, carrying the open QUESTION verbatim in `blocker` (NOT in problems) plus any fail/needs-changes findings in the problems array. 'blocked' (cannot determine) is DISTINCT from 'fail' (a definite defect) — never collapse one into the other. If YOU cannot merge into a determinate verdict, return 'blocked' with your QUESTION in `blocker`, through the mandatory StructuredOutput — never answer in prose.\n\n" + block + "\n\n" +
-    "Return the final VERDICT, the merged evidence, and the consolidated problems array (empty when there are none).\n\n" + COMMS
+    "Return the final VERDICT, the merged evidence, and the consolidated problems array (empty when there are none).\n\n" + GUIDELINES_BLOCK + "\n\n" + COMMS
   for (let k = startIdx; k < LADDER.length; k++) {
     const note = stuckReason ? "\n\nA lower-tier integrator (" + LADDER[k - 1] + ") could not resolve this and escalated to you with:\n" + stuckReason + "\nResolve it if you can; escalate again only if it stays genuinely unresolvable.\n" : ""
     review = await safeAgent(

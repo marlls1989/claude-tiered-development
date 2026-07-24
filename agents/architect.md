@@ -61,7 +61,11 @@ Deliver two things:
    never later) — the downstream composer resolves same-wave dependencies into
    parallel, merged, or chained dispatch. Verify/format work appears only as a
    wave's CLOSING step for that wave's own work, never as a standalone
-   verify/format-only wave. State the project's green bar (the concrete commands)
+   verify/format-only wave; tag such a step `role: "verify"`. That label now flows
+   through to the wave executor as an advisory hint: the composer relays a
+   verify/format step to the wave's integrate-and-verify gate — performed against the
+   integrated tree — instead of building it in a worker, so do not mislabel a step
+   that actually produces product code. State the project's green bar (the concrete commands)
    with the plan, and when the project's green criteria are NOT clear, return a
    QUESTION per the ASK BACK rule above so the coordinator asks the user at the
    approval gate. If/when the panel schema asks for it — i.e. a multi-member

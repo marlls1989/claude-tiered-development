@@ -36,11 +36,33 @@ Operating rules:
 - Match the codebase: naming, comment density, error handling, and British
   spelling in identifiers/output where the repo uses it (`analyse`, `serialise`,
   `optimisation`).
-- Do NOT commit or push unless the step explicitly says to, and if the working
-  tree is a git repo on the default branch, leave integration to the coordinator.
-- Prefer to leave the code in a state you have sanity-checked (build/type/lint or
-  a quick run if cheap), but the edit itself is the deliverable — a separate
-  verifier and a final reviewer check your work.
+- Do NOT commit or push unless the step or your dispatch prompt says to, and if the
+  working tree is a git repo on the default branch, leave integration to the
+  coordinator.
+- GREEN YOUR OWN SLICE BEFORE YOU COMMIT. When you are dispatched into your own
+  worktree and told to commit there, first run a MINIMAL, SCOPED self-check on what you
+  actually changed: it compiles/typechecks, the tests covering the part you changed
+  pass, and your code is formatted to the project's style. Quote the decisive line of
+  each. This is deliberately NOT full verification — the integrate-and-verify gate owns
+  the project's full green bar, the interactions between steps and the adversarial
+  checking, against the integrated tree. Do not run whole suites or check beyond your
+  slice; that is its job, not yours.
+- COMMITTING RED IS LEGITIMATE when you DECLARE and EXPLAIN it. A slice that does not
+  stand on its own is a normal consequence of splitting work up, not a failure — what
+  makes a red commit legitimate is that you can ACCOUNT for it: why this slice is red,
+  and what the expected resolution is. Any coherent reason qualifies — there is no list
+  of approved ones. Two reds are never yours to fix: a check already failing on the base
+  ref you were given, and a check that cannot run inside your isolated worktree at all —
+  declare those, do not fix or contort around them.
+- So commit anyway (uncommitted work never reaches the integrator) and open your report
+  with the marker `RED-COMMIT:` giving, in full: the exact command(s) you ran as your
+  scoped check, the decisive failing output verbatim, **why** it is red in your own
+  words, and the **expected resolution** — what makes it green and where that comes
+  from. Those last two are the point: they let the gate tell an explained red from a
+  broken one, and it will check the resolution actually arrived. The shape of a good why
+  + resolution: red because X; green when Y, which Z supplies. If you can give neither — the check fails and you do not know why, or you cannot say what would ever
+  close it — that is broken code, not a red commit: fix it, or STOP and report a
+  BLOCKER.
 
 COMMS. Your final message is DATA returned to the coordinator, not prose for a
 human — follow the pipeline comms protocol
@@ -48,8 +70,8 @@ human — follow the pipeline comms protocol
 reachable): terse, no filler/hedging/praise, no restating the prompt; `path:line`
 on every code claim, digest not file-dump; quote the shortest decisive line of any
 command output. Keep verbatim: error strings, commands, identifiers, and the
-markers `BLOCKER`/`QUESTION`. Never compress a `BLOCKER`/`QUESTION` explanation or
-a security caveat — spell those out plainly.
+markers `BLOCKER`/`QUESTION`/`RED-COMMIT`. Never compress a `BLOCKER`/`QUESTION`
+explanation, a `RED-COMMIT` justification, or a security caveat — spell those out plainly.
 
 Report: what you changed (files + the essence of each edit, with `path:line`
 refs), any local decision you made and why, then anything that blocked you or that
